@@ -1,12 +1,3 @@
-"""
-Module role2_mining.py
-Implementasi Komprehensif Task 3, Task 4, Task 5, dan Task 6 untuk Role 2:
-- Task 3: Transactional Database Construction (Author-Based & Author-Year-Based)
-- Task 4: Frequent Pattern Mining (Apriori & FP-Growth, 4 min_support: 0.1%, 0.5%, 1%, 2%)
-- Task 5: Association Rule Mining (min_confidence 50%, Support, Confidence, Lift, Top 10 Lift)
-- Task 6: Algorithm Performance Comparison (Runtime, Memory, Itemsets, Rules, Evaluasi)
-"""
-
 import time
 import tracemalloc
 from pathlib import Path
@@ -15,8 +6,6 @@ import numpy as np
 import pandas as pd
 from mlxtend.frequent_patterns import apriori, fpgrowth, association_rules
 from mlxtend.preprocessing import TransactionEncoder
-
-# Import data_loader
 from data_loader import load_clean_data
 
 OUTPUT_DIR = Path("output")
@@ -146,7 +135,7 @@ def run_frequent_pattern_mining(author_tx, min_supports=[0.001, 0.005, 0.01, 0.0
     print("TASK 4 & TASK 6: FREQUENT PATTERN MINING & PERFORMANCE COMPARISON")
     print("="*80)
 
-    # 1. Transformasi transaksi ke format Sparse Matrix untuk efisiensi RAM masif
+    # Transformasi transaksi ke format Sparse Matrix untuk efisiensi RAM masif
     print("[Encoder] Melakukan One-Hot Encoding dengan matriks sparse...")
     te = TransactionEncoder()
     te_ary = te.fit(author_tx).transform(author_tx, sparse=True)
@@ -160,7 +149,7 @@ def run_frequent_pattern_mining(author_tx, min_supports=[0.001, 0.005, 0.01, 0.0
         sup_pct = f"{s*100:.1f}%"
         print(f"\n>>> Running Experiments pada Minimum Support: {sup_pct} ({s}) <<<")
 
-        # --- A. FP-GROWTH ---
+        # A. FP-GROWTH
         tracemalloc.start()
         t0 = time.perf_counter()
         frequent_fp = fpgrowth(df_sparse, min_support=s, use_colnames=True)
@@ -175,7 +164,7 @@ def run_frequent_pattern_mining(author_tx, min_supports=[0.001, 0.005, 0.01, 0.0
         else:
             frequent_fp["length"] = 0
 
-        # --- B. APRIORI ---
+        # B. APRIORI
         tracemalloc.start()
         t0 = time.perf_counter()
         frequent_ap = apriori(df_sparse, min_support=s, use_colnames=True)
@@ -252,7 +241,6 @@ def run_frequent_pattern_mining(author_tx, min_supports=[0.001, 0.005, 0.01, 0.0
     ]
     print(benchmark_df[cols_display].to_string(index=False))
 
-    # Visualisasi Komparasi Performa Task 6
     plot_performance_comparison(benchmark_df)
 
     return fpm_results, benchmark_df
@@ -266,7 +254,7 @@ def plot_performance_comparison(benchmark_df):
     x = np.arange(len(x_labels))
     width = 0.35
 
-    # 1. Runtime Comparison
+    # Runtime Comparison
     axes[0].bar(x - width/2, benchmark_df["Runtime Apriori (s)"], width, label="Apriori", color="#E53E3E")
     axes[0].bar(x + width/2, benchmark_df["Runtime FP-Growth (s)"], width, label="FP-Growth", color="#3182CE")
     axes[0].set_title("Runtime Comparison (Detik)", fontsize=11, fontweight="bold")
@@ -277,7 +265,7 @@ def plot_performance_comparison(benchmark_df):
     axes[0].legend()
     axes[0].grid(axis="y", linestyle="--", alpha=0.6)
 
-    # 2. Peak Memory Comparison
+    # Peak Memory Comparison
     axes[1].bar(x - width/2, benchmark_df["Peak RAM Apriori (MB)"], width, label="Apriori", color="#DD6B20")
     axes[1].bar(x + width/2, benchmark_df["Peak RAM FP-Growth (MB)"], width, label="FP-Growth", color="#38A169")
     axes[1].set_title("Peak Memory Usage (MB)", fontsize=11, fontweight="bold")
@@ -288,7 +276,7 @@ def plot_performance_comparison(benchmark_df):
     axes[1].legend()
     axes[1].grid(axis="y", linestyle="--", alpha=0.6)
 
-    # 3. Itemsets & Rules Count
+    # Itemsets & Rules Count
     axes[2].plot(x_labels, benchmark_df["Total Itemsets (FP)"], marker="o", linewidth=2.5, color="#805AD5", label="Frequent Itemsets")
     axes[2].plot(x_labels, benchmark_df["Total Rules (Conf 50%)"], marker="s", linewidth=2.5, color="#D69E2E", label="Rules (Conf >= 50%)")
     axes[2].set_title("Jumlah Itemsets & Rules vs Min Support", fontsize=11, fontweight="bold")
@@ -317,12 +305,10 @@ def run_association_rule_mining(fpm_results, target_support=0.001):
     print("TASK 5: ASSOCIATION RULE MINING (MIN CONFIDENCE 50%)")
     print("="*80)
 
-    # Ambil frequent itemsets dari support 0.1% (atau terendah yang tersedia)
     if target_support in fpm_results and not fpm_results[target_support]["fp_itemsets"].empty:
         fi = fpm_results[target_support]["fp_itemsets"]
         used_sup = target_support
     else:
-        # Ambil support terkecil yang memiliki itemset
         used_sup = min(fpm_results.keys())
         fi = fpm_results[used_sup]["fp_itemsets"]
 
@@ -333,12 +319,10 @@ def run_association_rule_mining(fpm_results, target_support=0.001):
         print("[Rules] Tidak ada aturan asosiasi yang memenuhi threshold confidence 50%.")
         return pd.DataFrame()
 
-    # Format representasi himpunan agar rapi
     rules["antecedents_str"] = rules["antecedents"].apply(lambda s: "{" + ", ".join(list(s)) + "}")
     rules["consequents_str"] = rules["consequents"].apply(lambda s: "{" + ", ".join(list(s)) + "}")
     rules["rule_str"] = rules["antecedents_str"] + " -> " + rules["consequents_str"]
 
-    # Urutkan berdasarkan Lift tertinggi
     rules_sorted_lift = rules.sort_values(by="lift", ascending=False).reset_index(drop=True)
     top10_lift = rules_sorted_lift.head(10).copy()
 
@@ -346,7 +330,6 @@ def run_association_rule_mining(fpm_results, target_support=0.001):
     print("\n--- TOP 10 ASSOCIATION RULES BERDASARKAN LIFT TERTINGGI ---")
     print(top10_lift[cols_show].to_string(index=False))
 
-    # Analisis Hubungan Support vs Lift
     print("\n--- ANALISIS KORELASI SUPPORT VS LIFT ---")
     corr = rules["support"].corr(rules["lift"])
     print(f"Koefisien Korelasi Pearson antara Support dan Lift: {corr:.4f}")

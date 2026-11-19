@@ -12,9 +12,7 @@ NOTEBOOK_PATH = Path("ProjectDataMining_dblpDec2025.ipynb")
 def build_role2_cells():
     cells = []
 
-    # -------------------------------------------------------------------------
     # SELESAIKAN PREPROCESSING TASK 1 SECARA MULUS JIKA BELUM LENGKAP
-    # -------------------------------------------------------------------------
     cells.append({
         "cell_type": "markdown",
         "metadata": {},
