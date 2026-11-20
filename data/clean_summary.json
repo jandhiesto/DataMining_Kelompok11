@@ -1,0 +1,86 @@
+{
+  "source_raw_parquet": "data\\raw_inproceedings.parquet",
+  "clean_parquet": "data\\clean_inproceedings.parquet",
+  "clean_parquet_size_bytes": 205006040,
+  "clean_parquet_sha256": "778066063eb72e3db573fc8a50669f3f1e9b2faa6903393d47812242227fcf94",
+  "columns": [
+    "paper_key",
+    "author_id",
+    "n_authors",
+    "title",
+    "year",
+    "booktitle",
+    "crossref",
+    "key_prefix",
+    "venue_key",
+    "venue_name",
+    "in_conf_prefix",
+    "is_workshop"
+  ],
+  "n_papers_raw": 1901774,
+  "n_papers_clean": 1899038,
+  "n_papers_removed": 2736,
+  "n_unique_authors": 1738301,
+  "n_total_author_entries": 7428192,
+  "n_unique_venues_all": 4232,
+  "n_unique_venues_conf_prefix": 4230,
+  "n_workshop_papers": 103683,
+  "papers_by_year": {
+    "2015": 161268,
+    "2016": 162107,
+    "2017": 168096,
+    "2018": 176560,
+    "2019": 188716,
+    "2020": 171809,
+    "2021": 177973,
+    "2022": 178232,
+    "2023": 200399,
+    "2024": 207629,
+    "2025": 106249
+  },
+  "funnel": [
+    {
+      "step": "Raw extract: inproceedings, 2015-2025 (done at extraction, documentation only)",
+      "rows_before": 1901774,
+      "rows_after": 1901774,
+      "removed": 0,
+      "note": ""
+    },
+    {
+      "step": "T01 Drop rows missing author/booktitle/venue_key/year",
+      "rows_before": 1901774,
+      "rows_after": 1900159,
+      "removed": 1615,
+      "note": "blank titles kept"
+    },
+    {
+      "step": "T02 Year: cast year_raw to int16, consistency check vs key suffix and crossref (no correction)",
+      "rows_before": 1900159,
+      "rows_after": 1900159,
+      "removed": 0,
+      "note": "rows disagreeing on >=1 signal: 7006; on both: 673"
+    },
+    {
+      "step": "T03 Author normalization (NFC, whitespace, drop empty, keep suffix, dedupe per paper)",
+      "rows_before": 1900159,
+      "rows_after": 1900159,
+      "removed": 0,
+      "note": "blank entries removed: 0"
+    },
+    {
+      "step": "T04 Venue normalization (canonical venue_key, display venue_name, is_workshop flag)",
+      "rows_before": 1900159,
+      "rows_after": 1900159,
+      "removed": 0,
+      "note": "unique venue_key: 4,232; workshop rows: 103,815"
+    },
+    {
+      "step": "T05 Remove Tier-2 duplicates (same venue_key, year, normalized title, and author set)",
+      "rows_before": 1900159,
+      "rows_after": 1899038,
+      "removed": 1121,
+      "note": "confirmed duplicates removed: 1,121"
+    }
+  ],
+  "exported_at": "2026-11-21 00:53:33"
+}

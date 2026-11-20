@@ -2,12 +2,23 @@
   "snapshot": "dblp-2025-12-01",
   "dtd": "dblp-2023-06-28.dtd",
   "xml_size_bytes": 4939110596,
+  "xml_sha256": "0f3dbcbd332674bd2e292395367888d1d39dec2a497d08d5c08b1d8298907d3e",
   "year_filter": [
     2015,
     2025
   ],
-  "extracted_at": "2026-11-16 14:53:52",
-  "elapsed_seconds": 405.1,
+  "columns": [
+    "paper_key",
+    "authors",
+    "title",
+    "year_raw",
+    "booktitle",
+    "crossref",
+    "key_prefix",
+    "venue_key"
+  ],
+  "extracted_at": "2026-11-20 16:52:58",
+  "elapsed_seconds": 499.8,
   "total_records": 12169828,
   "record_type_counts": {
     "incollection": 70988,
