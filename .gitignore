@@ -1,8 +1,12 @@
 # Large data files
 data/*.parquet
 data/*.tmp
+data/old/
 *.xml
 *.dtd
+
+# personal files
+mymarkdownfiles/
 
 # Python cache
 __pycache__/
