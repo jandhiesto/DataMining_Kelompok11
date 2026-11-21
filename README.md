@@ -40,4 +40,4 @@ Sesuai kesepakatan commit terbaru `Role1`, notebook utama proyek adalah **`Noteb
    ```bash
    python src/role2_mining.py
    ```
-   Seluruh tabel CSV, ringkasan JSON, dan grafik PNG akan diekspor ke folder `output/`.
+   Seluruh tabel CSV, ringkasan JSON, dan grafik PNG Role 2 akan diekspor ke folder `output/role2/`.

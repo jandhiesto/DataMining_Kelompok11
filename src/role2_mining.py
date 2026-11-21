@@ -39,7 +39,7 @@ try:
 except ImportError:
     from data_loader import build_venue_label_map, load_clean_data
 
-OUTPUT_DIR = Path("output")
+OUTPUT_DIR = Path("output") / "role2"
 MIN_SUPPORTS = [0.001, 0.005, 0.01, 0.02]
 MIN_CONFIDENCE = 0.50
 
@@ -70,7 +70,7 @@ def construct_transactional_databases(
     B. Author-Year-Based Transaction: 1 transaksi = 1 (author_id, year), item = himpunan venue_key unik tahun tsb.
     """
     t0 = time.perf_counter()
-    output_dir.mkdir(exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Faktorisasi venue_key dan konversi tahun ke offset (year - year_min)
     venue_codes_paper, unique_venues = pd.factorize(df["venue_key"], sort=True)
@@ -510,7 +510,7 @@ def run_fpm_and_benchmark(
     untuk setiap nilai minimum support (0.1%, 0.5%, 1%, 2%), memverifikasi kesamaan
     itemsets & rules, serta mencatat runtime dan peak memory secara adil.
     """
-    output_dir.mkdir(exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     n_total = X_author.shape[0]
     benchmark_rows = []
     results_by_sup = {}
@@ -742,7 +742,7 @@ def analyze_association_rules(
     pada target_support (default 0.1% — paling kaya pola), menampilkan Top 10 Lift,
     dan menguji korelasi Support vs Lift.
     """
-    output_dir.mkdir(exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     rules = results_by_sup[target_support]["rules_fp"].copy()
 
     print("\n" + "=" * 78)
