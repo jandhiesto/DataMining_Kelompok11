@@ -1,398 +1,903 @@
+"""
+Module src/role2_mining.py
+Implementasi Production-Grade untuk Role 2 (Task 3, Task 4, Task 5, Task 6)
+menggunakan dataset bersih DBLP 2015-2025 dari Role 1 (`data/clean_inproceedings.parquet`).
+
+Skala data nyata DBLP (clean_summary.json):
+- 1.899.038 publikasi bersih (inproceedings 2015-2025)
+- 1.738.301 author unik (Author-Based transactions)
+- 7.428.192 entri author-paper
+- 4.232 venue_key kanonik unik (1-ke-1 dengan venue_name)
+
+Optimasi teknik agar cepat & hemat RAM di laptop (16 GB RAM) tanpa aproksimasi:
+1. Konstruksi transaksi sepenuhnya vectorized via NumPy int64 bit-packing + SciPy CSR sparse matrix.
+2. Pada setiap level minimum support (0.1%, 0.5%, 1%, 2%), dilakukan proyeksi eksak ke kolom
+   frequent 1-itemset dan baris aktif (sifat anti-monotonitas Apriori) dengan penyesuaian
+   threshold eksak terhadap N_total = 1.738.301 sehingga seluruh support & itemsets
+   100% identik secara matematis dengan komputasi matriks penuh.
+"""
+
+import gc
+import json
+import math
 import time
 import tracemalloc
 from pathlib import Path
+from typing import Dict, List, Tuple
+
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from mlxtend.frequent_patterns import apriori, fpgrowth, association_rules
-from mlxtend.preprocessing import TransactionEncoder
-from data_loader import load_clean_data
+from mlxtend.frequent_patterns import apriori, association_rules, fpgrowth
+from scipy.sparse import csr_matrix
+from scipy.stats import spearmanr
+
+try:
+    from src.data_loader import build_venue_label_map, load_clean_data
+except ImportError:
+    from data_loader import build_venue_label_map, load_clean_data
 
 OUTPUT_DIR = Path("output")
-OUTPUT_DIR.mkdir(exist_ok=True)
+MIN_SUPPORTS = [0.001, 0.005, 0.01, 0.02]
+MIN_CONFIDENCE = 0.50
+
+
+def format_itemset(itemset, label_map: Dict[str, str]) -> str:
+    """Mengubah frozenset venue_key menjadi string label tampilan terurut."""
+    labels = sorted(label_map.get(k, str(k)) for k in itemset)
+    return "{" + ", ".join(labels) + "}"
+
+
+def format_itemset_keys(itemset) -> str:
+    """Mengubah frozenset venue_key menjadi string venue_key kanonik terurut."""
+    return "{" + ", ".join(sorted(str(k) for k in itemset)) + "}"
 
 
 # ==============================================================================
 # TASK 3: TRANSACTIONAL DATABASE CONSTRUCTION
 # ==============================================================================
-def construct_transactional_databases(df):
+def construct_transactional_databases(
+    df: pd.DataFrame,
+    venue_display_map: Dict[str, str],
+    output_dir: Path = OUTPUT_DIR,
+    save_artifacts: bool = True,
+) -> dict:
     """
-    Membangun dua jenis representasi transaksi dari dataset DBLP:
-    A. Author-Based: Satu transaksi = 1 author, item = daftar venue unik (2015-2025).
-    B. Author-Year-Based: Satu transaksi = kombinasi (author, year), item = daftar venue unik pada tahun tersebut.
+    Membangun dua jenis representasi transactional database secara vectorized:
+    A. Author-Based Transaction: 1 transaksi = 1 author_id, item = himpunan venue_key unik (2015-2025).
+    B. Author-Year-Based Transaction: 1 transaksi = 1 (author_id, year), item = himpunan venue_key unik tahun tsb.
     """
-    print("\n" + "="*80)
-    print("TASK 3: TRANSACTIONAL DATABASE CONSTRUCTION")
-    print("="*80)
+    t0 = time.perf_counter()
+    output_dir.mkdir(exist_ok=True)
 
-    # Explode authors sehingga setiap baris berisi (paper_key, author, year, venue)
-    df_exploded = df.explode("authors").rename(columns={"authors": "author"}).copy()
-    df_exploded["author"] = df_exploded["author"].astype(str).str.strip()
-    df_exploded = df_exploded[df_exploded["author"] != ""].copy()
+    # 1. Faktorisasi venue_key dan konversi tahun ke offset (year - year_min)
+    venue_codes_paper, unique_venues = pd.factorize(df["venue_key"], sort=True)
+    unique_venues = np.asarray(unique_venues, dtype=object)
+    n_venues = len(unique_venues)
+    assert n_venues < (1 << 16), f"Jumlah venue ({n_venues}) melebihi batas 16-bit!"
 
-    # A. Author-Based Transaction Database
-    # Groupby author -> set of unique venues
-    author_grouped = (
-        df_exploded.groupby("author")["venue"]
-        .apply(lambda s: sorted(list(set(s))))
-        .reset_index(name="venues")
+    year_min = int(df["year"].min())
+    year_max = int(df["year"].max())
+    year_offsets_paper = (df["year"].to_numpy(dtype=np.int16) - year_min).astype(np.int16)
+    assert (year_max - year_min) < 16, "Rentang tahun melebihi 4-bit offset!"
+
+    # 2. Ratakan daftar author_id menjadi array flat & faktorisasi author_id
+    authors_col = df["author_id"].tolist()
+    n_authors_per_paper = np.fromiter(
+        (len(lst) for lst in authors_col), dtype=np.int32, count=len(authors_col)
     )
-    author_tx = author_grouped["venues"].tolist()
-
-    # B. Author-Year-Based Transaction Database
-    # Groupby (author, year) -> set of unique venues
-    author_year_grouped = (
-        df_exploded.groupby(["author", "year"])["venue"]
-        .apply(lambda s: sorted(list(set(s))))
-        .reset_index(name="venues")
+    flat_authors = [a for lst in authors_col for a in lst]
+    author_codes_flat, unique_authors = pd.factorize(
+        pd.Series(flat_authors, dtype="object"), sort=False
     )
-    author_year_tx = author_year_grouped["venues"].tolist()
+    del flat_authors, authors_col
+    unique_authors = np.asarray(unique_authors, dtype=object)
+    n_authors = len(unique_authors)
 
-    # Statistik Dasar
-    author_tx_lens = [len(tx) for tx in author_tx]
-    author_year_tx_lens = [len(tx) for tx in author_year_tx]
+    venue_codes_flat = np.repeat(venue_codes_paper.astype(np.int32), n_authors_per_paper)
+    year_offsets_flat = np.repeat(year_offsets_paper.astype(np.int32), n_authors_per_paper)
+    del venue_codes_paper, year_offsets_paper, n_authors_per_paper
+    gc.collect()
 
-    unique_venues_a = len(set(v for tx in author_tx for v in tx))
-    unique_venues_ay = len(set(v for tx in author_year_tx for v in tx))
+    # --------------------------------------------------------------------------
+    # A. Author-Based Transactional Database (deduplikasi pasangan author, venue)
+    # --------------------------------------------------------------------------
+    av_keys = (author_codes_flat.astype(np.int64) << 16) | venue_codes_flat.astype(np.int64)
+    av_unique = np.unique(av_keys)
+    del av_keys
+
+    u_author = (av_unique >> 16).astype(np.int32)
+    u_venue = (av_unique & 0xFFFF).astype(np.int32)
+    del av_unique
+
+    X_author = csr_matrix(
+        (np.ones(len(u_author), dtype=bool), (u_author, u_venue)),
+        shape=(n_authors, n_venues),
+        dtype=bool,
+    )
+    X_author.sort_indices()
+    author_tx_lens = np.diff(X_author.indptr).astype(np.int32)
+    del u_author, u_venue
+
+    # --------------------------------------------------------------------------
+    # B. Author-Year-Based Transactional Database (deduplikasi tripel author, year, venue)
+    # --------------------------------------------------------------------------
+    ayv_keys = (
+        (author_codes_flat.astype(np.int64) << 20)
+        | (year_offsets_flat.astype(np.int64) << 16)
+        | venue_codes_flat.astype(np.int64)
+    )
+    del author_codes_flat, year_offsets_flat, venue_codes_flat
+    gc.collect()
+
+    ayv_unique = np.unique(ayv_keys)
+    del ayv_keys
+
+    ay_pair_keys = ayv_unique >> 16  # (author_code << 4) | year_offset
+    unique_ay_keys, ay_start_idx, ay_tx_lens = np.unique(
+        ay_pair_keys, return_index=True, return_counts=True
+    )
+    ay_tx_lens = ay_tx_lens.astype(np.int32)
+    n_ay_tx = len(unique_ay_keys)
+    ay_unique_venues = int(len(np.unique(ayv_unique & 0xFFFF)))
+
+    # --------------------------------------------------------------------------
+    # Contoh Transaksi (10 Author-Based & 10 Author-Year-Based, deterministik)
+    # Memilih campuran transaksi 1-item dan multi-item secara deterministik agar informatif
+    # --------------------------------------------------------------------------
+    rng = np.random.default_rng(42)
+
+    def pick_representative_indices(lens_arr: np.ndarray, total_n: int = 10) -> List[int]:
+        chosen = []
+        # Ambil 2 contoh panjang 1, 3 panjang 2, 3 panjang 3-5, 2 panjang >=6 (jika tersedia)
+        buckets = [
+            (np.where(lens_arr == 1)[0], 2),
+            (np.where(lens_arr == 2)[0], 3),
+            (np.where((lens_arr >= 3) & (lens_arr <= 5))[0], 3),
+            (np.where(lens_arr >= 6)[0], 2),
+        ]
+        for pool, k in buckets:
+            if len(pool) > 0:
+                take = min(k, len(pool))
+                chosen.extend(rng.choice(pool, size=take, replace=False).tolist())
+        # Jika kurang dari 10, lengkapi secara acak dari sisa indeks
+        if len(chosen) < total_n:
+            remaining = np.setdiff1d(np.arange(len(lens_arr)), chosen)
+            extra = min(total_n - len(chosen), len(remaining))
+            if extra > 0:
+                chosen.extend(rng.choice(remaining, size=extra, replace=False).tolist())
+        return sorted(chosen[:total_n], key=lambda idx: (-int(lens_arr[idx]), idx))
+
+    sample_a_idx = pick_representative_indices(author_tx_lens, 10)
+    examples_author = []
+    for rank, idx in enumerate(sample_a_idx, start=1):
+        v_idxs = X_author.indices[X_author.indptr[idx] : X_author.indptr[idx + 1]]
+        v_keys = [str(unique_venues[j]) for j in v_idxs]
+        v_names = [venue_display_map.get(vk, vk) for vk in v_keys]
+        examples_author.append({
+            "no": rank,
+            "author_id": str(unique_authors[idx]),
+            "n_items": len(v_keys),
+            "venue_keys": ", ".join(v_keys),
+            "venue_names": ", ".join(v_names),
+        })
+    df_ex_author = pd.DataFrame(examples_author)
+
+    sample_ay_idx = pick_representative_indices(ay_tx_lens, 10)
+    examples_ay = []
+    for rank, tx_i in enumerate(sample_ay_idx, start=1):
+        start = int(ay_start_idx[tx_i])
+        length = int(ay_tx_lens[tx_i])
+        slice_keys = ayv_unique[start : start + length]
+        a_code = int(unique_ay_keys[tx_i] >> 4)
+        yr = year_min + int(unique_ay_keys[tx_i] & 0xF)
+        v_idxs = (slice_keys & 0xFFFF).astype(np.int32)
+        v_keys = [str(unique_venues[j]) for j in v_idxs]
+        v_names = [venue_display_map.get(vk, vk) for vk in v_keys]
+        examples_ay.append({
+            "no": rank,
+            "author_id": str(unique_authors[a_code]),
+            "year": yr,
+            "n_items": len(v_keys),
+            "venue_keys": ", ".join(v_keys),
+            "venue_names": ", ".join(v_names),
+        })
+    df_ex_ay = pd.DataFrame(examples_ay)
+
+    del ayv_unique, ay_pair_keys, unique_ay_keys, ay_start_idx
+    gc.collect()
+
+    # --------------------------------------------------------------------------
+    # Tabel Statistik Komparasi Kedua Representasi
+    # --------------------------------------------------------------------------
+    def summarize_lengths(lens_arr: np.ndarray, n_items_unique: int) -> dict:
+        n_tx = len(lens_arr)
+        nnz = int(lens_arr.sum())
+        density_pct = (nnz / (n_tx * n_items_unique)) * 100.0 if (n_tx * n_items_unique) > 0 else 0.0
+        n_eq1 = int((lens_arr == 1).sum())
+        n_ge2 = int((lens_arr >= 2).sum())
+        n_ge3 = int((lens_arr >= 3).sum())
+        return {
+            "n_tx": n_tx,
+            "n_unique_items": n_items_unique,
+            "total_entries": nnz,
+            "density_pct": density_pct,
+            "min": int(lens_arr.min()),
+            "p25": float(np.percentile(lens_arr, 25)),
+            "median": float(np.median(lens_arr)),
+            "mean": float(lens_arr.mean()),
+            "p75": float(np.percentile(lens_arr, 75)),
+            "p95": float(np.percentile(lens_arr, 95)),
+            "p99": float(np.percentile(lens_arr, 99)),
+            "max": int(lens_arr.max()),
+            "std": float(lens_arr.std()),
+            "n_eq1": n_eq1,
+            "pct_eq1": (n_eq1 / n_tx) * 100.0,
+            "n_ge2": n_ge2,
+            "pct_ge2": (n_ge2 / n_tx) * 100.0,
+            "n_ge3": n_ge3,
+            "pct_ge3": (n_ge3 / n_tx) * 100.0,
+        }
+
+    s_a = summarize_lengths(author_tx_lens, n_venues)
+    s_ay = summarize_lengths(ay_tx_lens, ay_unique_venues)
 
     stats_df = pd.DataFrame({
         "Metrik": [
-            "Total Transaksi",
-            "Jumlah Item Unik (Venues)",
-            "Panjang Min Item",
-            "Panjang Max Item",
-            "Rata-rata Item per Transaksi",
-            "Median Panjang Item",
-            "Std Dev Panjang Item"
+            "Jumlah Transaksi",
+            "Jumlah Item Unik (venue_key)",
+            "Total Pasangan Transaksi-Item (NNZ)",
+            "Kepadatan Matriks (%)",
+            "Item per Transaksi — Min",
+            "Item per Transaksi — Kuartil 1 (P25)",
+            "Item per Transaksi — Median (P50)",
+            "Item per Transaksi — Rata-rata (Mean)",
+            "Item per Transaksi — Kuartil 3 (P75)",
+            "Item per Transaksi — Persentil 95 (P95)",
+            "Item per Transaksi — Persentil 99 (P99)",
+            "Item per Transaksi — Maksimum",
+            "Item per Transaksi — Standar Deviasi",
+            "Transaksi 1 Item (len = 1)",
+            "Transaksi Multi-Item (len >= 2)",
+            "Transaksi >= 3 Item (len >= 3)",
         ],
         "Author-Based": [
-            f"{len(author_tx):,}",
-            unique_venues_a,
-            min(author_tx_lens),
-            max(author_tx_lens),
-            f"{np.mean(author_tx_lens):.2f}",
-            np.median(author_tx_lens),
-            f"{np.std(author_tx_lens):.2f}"
+            f"{s_a['n_tx']:,}",
+            f"{s_a['n_unique_items']:,}",
+            f"{s_a['total_entries']:,}",
+            f"{s_a['density_pct']:.4f}%",
+            f"{s_a['min']}",
+            f"{s_a['p25']:.1f}",
+            f"{s_a['median']:.1f}",
+            f"{s_a['mean']:.3f}",
+            f"{s_a['p75']:.1f}",
+            f"{s_a['p95']:.1f}",
+            f"{s_a['p99']:.1f}",
+            f"{s_a['max']:,}",
+            f"{s_a['std']:.3f}",
+            f"{s_a['n_eq1']:,} ({s_a['pct_eq1']:.2f}%)",
+            f"{s_a['n_ge2']:,} ({s_a['pct_ge2']:.2f}%)",
+            f"{s_a['n_ge3']:,} ({s_a['pct_ge3']:.2f}%)",
         ],
         "Author-Year-Based": [
-            f"{len(author_year_tx):,}",
-            unique_venues_ay,
-            min(author_year_tx_lens),
-            max(author_year_tx_lens),
-            f"{np.mean(author_year_tx_lens):.2f}",
-            np.median(author_year_tx_lens),
-            f"{np.std(author_year_tx_lens):.2f}"
-        ]
+            f"{s_ay['n_tx']:,}",
+            f"{s_ay['n_unique_items']:,}",
+            f"{s_ay['total_entries']:,}",
+            f"{s_ay['density_pct']:.4f}%",
+            f"{s_ay['min']}",
+            f"{s_ay['p25']:.1f}",
+            f"{s_ay['median']:.1f}",
+            f"{s_ay['mean']:.3f}",
+            f"{s_ay['p75']:.1f}",
+            f"{s_ay['p95']:.1f}",
+            f"{s_ay['p99']:.1f}",
+            f"{s_ay['max']:,}",
+            f"{s_ay['std']:.3f}",
+            f"{s_ay['n_eq1']:,} ({s_ay['pct_eq1']:.2f}%)",
+            f"{s_ay['n_ge2']:,} ({s_ay['pct_ge2']:.2f}%)",
+            f"{s_ay['n_ge3']:,} ({s_ay['pct_ge3']:.2f}%)",
+        ],
     })
 
-    print("\n--- STATISTIK KOMPARASI REPRESENTASI TRANSAKSI ---")
-    print(stats_df.to_string(index=False))
-
-    print("\n--- 10 CONTOH TRANSAKSI AUTHOR-BASED ---")
-    for i in range(min(10, len(author_grouped))):
-        print(f"[{i+1}] {author_grouped.iloc[i]['author']}: {author_grouped.iloc[i]['venues']}")
-
-    print("\n--- 10 CONTOH TRANSAKSI AUTHOR-YEAR-BASED ---")
-    for i in range(min(10, len(author_year_grouped))):
-        row = author_year_grouped.iloc[i]
-        print(f"[{i+1}] {row['author']} ({row['year']}): {row['venues']}")
-
-    # Plot Distribusi Panjang Item
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 2, 1)
-    plt.hist(author_tx_lens, bins=range(1, max(author_tx_lens)+2), color="#2B6CB0", edgecolor="black", alpha=0.85)
-    plt.title("Distribusi Jumlah Item: Author-Based", fontsize=11, fontweight="bold")
-    plt.xlabel("Jumlah Item (Konferensi) per Transaksi")
-    plt.ylabel("Frekuensi")
-    plt.grid(axis="y", linestyle="--", alpha=0.6)
-
-    plt.subplot(1, 2, 2)
-    plt.hist(author_year_tx_lens, bins=range(1, max(author_year_tx_lens)+2), color="#C05621", edgecolor="black", alpha=0.85)
-    plt.title("Distribusi Jumlah Item: Author-Year-Based", fontsize=11, fontweight="bold")
-    plt.xlabel("Jumlah Item (Konferensi) per Transaksi")
-    plt.ylabel("Frekuensi")
-    plt.grid(axis="y", linestyle="--", alpha=0.6)
-
-    plt.tight_layout()
-    dist_plot_path = OUTPUT_DIR / "task3_transaction_distribution.png"
-    plt.savefig(dist_plot_path, dpi=300)
-    plt.close()
-    print(f"\n[Visualisasi] Plot distribusi disimpan ke: {dist_plot_path}")
-
-    return author_tx, author_year_tx, stats_df
-
-
-# ==============================================================================
-# TASK 4 & TASK 6: FREQUENT PATTERN MINING & ALGORITHM BENCHMARKING
-# ==============================================================================
-def run_frequent_pattern_mining(author_tx, min_supports=[0.001, 0.005, 0.01, 0.02]):
-    """
-    Menjalankan Apriori dan FP-Growth pada Author-Based Transaction Database
-    dengan 4 nilai minimum support: 0.1%, 0.5%, 1%, dan 2%.
-    Mengukur waktu eksekusi (runtime) dan memori puncak (peak memory).
-    """
-    print("\n" + "="*80)
-    print("TASK 4 & TASK 6: FREQUENT PATTERN MINING & PERFORMANCE COMPARISON")
-    print("="*80)
-
-    # Transformasi transaksi ke format Sparse Matrix untuk efisiensi RAM masif
-    print("[Encoder] Melakukan One-Hot Encoding dengan matriks sparse...")
-    te = TransactionEncoder()
-    te_ary = te.fit(author_tx).transform(author_tx, sparse=True)
-    df_sparse = pd.DataFrame.sparse.from_spmatrix(te_ary, columns=te.columns_)
-    print(f"[Encoder] Ukuran matriks transaksi: {df_sparse.shape[0]:,} transaksi x {df_sparse.shape[1]} venue unik.")
-
-    benchmark_records = []
-    fpm_results = {}
-
-    for s in min_supports:
-        sup_pct = f"{s*100:.1f}%"
-        print(f"\n>>> Running Experiments pada Minimum Support: {sup_pct} ({s}) <<<")
-
-        # A. FP-GROWTH
-        tracemalloc.start()
-        t0 = time.perf_counter()
-        frequent_fp = fpgrowth(df_sparse, min_support=s, use_colnames=True)
-        t_fp = time.perf_counter() - t0
-        _, peak_mem_fp = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
-        mem_fp_mb = peak_mem_fp / (1024 * 1024)
-
-        # Hitung panjang k-itemsets
-        if not frequent_fp.empty:
-            frequent_fp["length"] = frequent_fp["itemsets"].apply(len)
-        else:
-            frequent_fp["length"] = 0
-
-        # B. APRIORI
-        tracemalloc.start()
-        t0 = time.perf_counter()
-        frequent_ap = apriori(df_sparse, min_support=s, use_colnames=True)
-        t_ap = time.perf_counter() - t0
-        _, peak_mem_ap = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
-        mem_ap_mb = peak_mem_ap / (1024 * 1024)
-
-        if not frequent_ap.empty:
-            frequent_ap["length"] = frequent_ap["itemsets"].apply(len)
-        else:
-            frequent_ap["length"] = 0
-
-        # Verifikasi kesamaan himpunan itemset
-        set_fp = set(frequent_fp["itemsets"].apply(frozenset))
-        set_ap = set(frequent_ap["itemsets"].apply(frozenset))
-        is_identical = (set_fp == set_ap)
-
-        # Hitung association rules (min_conf = 0.50) untuk Task 6
-        if len(frequent_fp) > 0:
-            rules_fp = association_rules(frequent_fp, metric="confidence", min_threshold=0.50)
-            rules_ap = association_rules(frequent_ap, metric="confidence", min_threshold=0.50)
-            num_rules_fp = len(rules_fp)
-            num_rules_ap = len(rules_ap)
-        else:
-            num_rules_fp = 0
-            num_rules_ap = 0
-
-        # Hitung 1-itemsets, 2-itemsets, 3-itemsets
-        c1 = int((frequent_fp["length"] == 1).sum()) if not frequent_fp.empty else 0
-        c2 = int((frequent_fp["length"] == 2).sum()) if not frequent_fp.empty else 0
-        c3 = int((frequent_fp["length"] == 3).sum()) if not frequent_fp.empty else 0
-        c_more = int((frequent_fp["length"] >= 4).sum()) if not frequent_fp.empty else 0
-
-        benchmark_records.append({
-            "Min Support": sup_pct,
-            "Min Support (Float)": s,
-            "Total Itemsets (FP)": len(frequent_fp),
-            "Total Itemsets (Apriori)": len(frequent_ap),
-            "Itemsets Identik": is_identical,
-            "1-itemsets": c1,
-            "2-itemsets": c2,
-            "3-itemsets": c3,
-            ">=4-itemsets": c_more,
-            "Total Rules (Conf 50%)": num_rules_fp,
-            "Runtime FP-Growth (s)": round(t_fp, 4),
-            "Runtime Apriori (s)": round(t_ap, 4),
-            "Speedup (Apriori/FP)": round(t_ap / t_fp, 2) if t_fp > 0 else 1.0,
-            "Peak RAM FP-Growth (MB)": round(mem_fp_mb, 2),
-            "Peak RAM Apriori (MB)": round(mem_ap_mb, 2),
+    # Distribusi ringkas bucket panjang transaksi (1, 2, 3, 4, 5, 6-10, >10)
+    def bucket_dist(lens_arr: np.ndarray) -> pd.Series:
+        n = len(lens_arr)
+        labels = ["1", "2", "3", "4", "5", "6-10", ">10"]
+        counts = [
+            int((lens_arr == 1).sum()),
+            int((lens_arr == 2).sum()),
+            int((lens_arr == 3).sum()),
+            int((lens_arr == 4).sum()),
+            int((lens_arr == 5).sum()),
+            int(((lens_arr >= 6) & (lens_arr <= 10)).sum()),
+            int((lens_arr > 10).sum()),
+        ]
+        return pd.DataFrame({
+            "bucket": labels,
+            "count": counts,
+            "pct": [round(c / n * 100.0, 2) for c in counts],
         })
 
-        # Simpan hasil untuk analisis lebih lanjut
-        fpm_results[s] = {
-            "fp_itemsets": frequent_fp.sort_values(by="support", ascending=False).reset_index(drop=True),
-            "ap_itemsets": frequent_ap.sort_values(by="support", ascending=False).reset_index(drop=True),
-            "rules": rules_fp.sort_values(by="lift", ascending=False).reset_index(drop=True) if len(frequent_fp) > 0 else pd.DataFrame()
+    dist_a = bucket_dist(author_tx_lens)
+    dist_ay = bucket_dist(ay_tx_lens)
+
+    elapsed = time.perf_counter() - t0
+    print(f"\n[Task 3] Konstruksi kedua Transactional Database selesai dalam {elapsed:.2f} detik.")
+    print(stats_df.to_string(index=False))
+
+    if save_artifacts:
+        stats_df.to_csv(output_dir / "task3_transaction_stats.csv", index=False)
+        df_ex_author.to_csv(output_dir / "task3_examples_author.csv", index=False)
+        df_ex_ay.to_csv(output_dir / "task3_examples_author_year.csv", index=False)
+        plot_task3_distribution(author_tx_lens, ay_tx_lens, output_dir / "task3_transaction_distribution.png")
+
+    return {
+        "X_author": X_author,
+        "unique_venues": unique_venues,
+        "unique_authors": unique_authors,
+        "author_tx_lens": author_tx_lens,
+        "ay_tx_lens": ay_tx_lens,
+        "stats_df": stats_df,
+        "stats_raw": {"author_based": s_a, "author_year_based": s_ay},
+        "dist_author": dist_a,
+        "dist_ay": dist_ay,
+        "examples_author": df_ex_author,
+        "examples_ay": df_ex_ay,
+    }
+
+
+def plot_task3_distribution(
+    author_tx_lens: np.ndarray,
+    ay_tx_lens: np.ndarray,
+    out_path: Path,
+):
+    """Plot distribusi jumlah item per transaksi (skala log pada sumbu Y)."""
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Plot distribusi hingga batas persentil 99.9 atau cap visual yang rapi
+    cap_a = min(int(author_tx_lens.max()), 25)
+    vals_a, cnts_a = np.unique(np.minimum(author_tx_lens, cap_a), return_counts=True)
+    x_lbl_a = [f"{v}+" if v == cap_a and author_tx_lens.max() > cap_a else str(v) for v in vals_a]
+
+    axes[0].bar(range(len(vals_a)), cnts_a, color="#2B6CB0", edgecolor="black", alpha=0.88)
+    axes[0].set_yscale("log")
+    axes[0].set_xticks(range(len(vals_a)))
+    axes[0].set_xticklabels(x_lbl_a, fontsize=8, rotation=45 if len(vals_a) > 12 else 0)
+    axes[0].set_title(
+        f"Distribusi Jumlah Item: Author-Based\n(N = {len(author_tx_lens):,} transaksi | Mean = {author_tx_lens.mean():.2f})",
+        fontsize=10.5,
+        fontweight="bold",
+    )
+    axes[0].set_xlabel("Jumlah Venue Unik per Author (2015-2025)")
+    axes[0].set_ylabel("Jumlah Transaksi (Skala Log)")
+    axes[0].grid(axis="y", linestyle="--", alpha=0.5)
+
+    cap_ay = min(int(ay_tx_lens.max()), 15)
+    vals_ay, cnts_ay = np.unique(np.minimum(ay_tx_lens, cap_ay), return_counts=True)
+    x_lbl_ay = [f"{v}+" if v == cap_ay and ay_tx_lens.max() > cap_ay else str(v) for v in vals_ay]
+
+    axes[1].bar(range(len(vals_ay)), cnts_ay, color="#C05621", edgecolor="black", alpha=0.88)
+    axes[1].set_yscale("log")
+    axes[1].set_xticks(range(len(vals_ay)))
+    axes[1].set_xticklabels(x_lbl_ay, fontsize=8)
+    axes[1].set_title(
+        f"Distribusi Jumlah Item: Author-Year-Based\n(N = {len(ay_tx_lens):,} transaksi | Mean = {ay_tx_lens.mean():.2f})",
+        fontsize=10.5,
+        fontweight="bold",
+    )
+    axes[1].set_xlabel("Jumlah Venue Unik per (Author, Year)")
+    axes[1].set_ylabel("Jumlah Transaksi (Skala Log)")
+    axes[1].grid(axis="y", linestyle="--", alpha=0.5)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+    print(f"[Visualisasi] Disimpan ke: {out_path}")
+
+
+# ==============================================================================
+# TASK 4 & TASK 6: FREQUENT PATTERN MINING & ALGORITHM PERFORMANCE COMPARISON
+# ==============================================================================
+def _project_active_matrix(
+    X_author: csr_matrix,
+    unique_venues: np.ndarray,
+    min_support: float,
+) -> Tuple[pd.DataFrame, int, int, int, float]:
+    """
+    Proyeksi eksak (zero-approximation) berdasarkan sifat anti-monotonitas Apriori:
+    - Hanya kolom venue dengan count >= ceil(min_support * N_total) yang dapat muncul
+      dalam frequent itemset berukuran >= 1.
+    - Hanya baris transaksi yang memiliki >= 1 venue frequent tersebut yang dapat
+      berkontribusi pada hitungan support.
+    - Threshold disesuaikan eksak: s_adj = (min_count - 0.25) / N_active.
+    """
+    n_total = X_author.shape[0]
+    min_count = math.ceil(min_support * n_total - 1e-12)
+
+    venue_counts = np.asarray(X_author.sum(axis=0)).ravel()
+    freq_cols = np.where(venue_counts >= min_count)[0]
+    if len(freq_cols) == 0:
+        return pd.DataFrame(), n_total, 0, min_count, 1.0
+
+    X_sub = X_author[:, freq_cols].tocsr()
+    row_nnz = np.diff(X_sub.indptr)
+    active_rows = np.where(row_nnz > 0)[0]
+    X_active = X_sub[active_rows]
+    n_active = X_active.shape[0]
+    col_names = [str(unique_venues[c]) for c in freq_cols]
+
+    # Konversi ke DataFrame bool (1 byte per sel) untuk kompatibilitas penuh & RAM rendah di mlxtend
+    est_bytes = n_active * len(freq_cols)
+    if est_bytes <= 1_200_000_000:  # <= ~1.2 GB aman di 16 GB RAM
+        df_active = pd.DataFrame(X_active.toarray(), columns=col_names, dtype=bool)
+    else:
+        df_active = pd.DataFrame.sparse.from_spmatrix(X_active, columns=col_names)
+
+    s_adj = (min_count - 0.25) / float(n_active)
+    return df_active, n_total, n_active, min_count, s_adj
+
+
+def _rescale_itemsets(
+    fi: pd.DataFrame,
+    n_active: int,
+    n_total: int,
+    min_count: int,
+    venue_display_map: Dict[str, str],
+) -> pd.DataFrame:
+    """Mengembalikan nilai support eksak terhadap N_total dan menambahkan kolom bantu."""
+    if fi is None or fi.empty:
+        return pd.DataFrame(
+            columns=["support", "count", "itemsets", "length", "itemsets_keys", "itemsets_names"]
+        )
+    out = fi.copy()
+    counts = np.rint(out["support"].to_numpy(dtype=np.float64) * n_active).astype(np.int64)
+    out["count"] = counts
+    out["support"] = counts / float(n_total)
+    out = out[out["count"] >= min_count].copy()
+    out["length"] = out["itemsets"].apply(len).astype(int)
+    out["itemsets_keys"] = out["itemsets"].apply(format_itemset_keys)
+    out["itemsets_names"] = out["itemsets"].apply(lambda s: format_itemset(s, venue_display_map))
+    out = out.sort_values(by=["support", "length", "itemsets_keys"], ascending=[False, True, True]).reset_index(drop=True)
+    return out
+
+
+def _generate_rules_safe(
+    fi: pd.DataFrame,
+    min_confidence: float,
+    venue_display_map: Dict[str, str],
+) -> pd.DataFrame:
+    """Membangkitkan association rules secara aman (menangani kasus tanpa >=2-itemsets)."""
+    if fi is None or fi.empty or not (fi["length"] >= 2).any():
+        return pd.DataFrame(
+            columns=[
+                "antecedents", "consequents", "antecedent support", "consequent support",
+                "support", "confidence", "lift", "antecedents_keys", "consequents_keys",
+                "antecedents_names", "consequents_names", "rule_keys", "rule_names",
+            ]
+        )
+    rules = association_rules(
+        fi[["support", "itemsets"]],
+        metric="confidence",
+        min_threshold=min_confidence,
+    )
+    if rules.empty:
+        return rules
+    rules["antecedents_keys"] = rules["antecedents"].apply(format_itemset_keys)
+    rules["consequents_keys"] = rules["consequents"].apply(format_itemset_keys)
+    rules["antecedents_names"] = rules["antecedents"].apply(lambda s: format_itemset(s, venue_display_map))
+    rules["consequents_names"] = rules["consequents"].apply(lambda s: format_itemset(s, venue_display_map))
+    rules["rule_keys"] = rules["antecedents_keys"] + " -> " + rules["consequents_keys"]
+    rules["rule_names"] = rules["antecedents_names"] + " -> " + rules["consequents_names"]
+    rules = rules.sort_values(
+        by=["lift", "confidence", "support"], ascending=[False, False, False]
+    ).reset_index(drop=True)
+    return rules
+
+
+def run_fpm_and_benchmark(
+    X_author: csr_matrix,
+    unique_venues: np.ndarray,
+    venue_display_map: Dict[str, str],
+    min_supports: List[float] = MIN_SUPPORTS,
+    min_confidence: float = MIN_CONFIDENCE,
+    output_dir: Path = OUTPUT_DIR,
+    save_artifacts: bool = True,
+) -> Tuple[dict, pd.DataFrame]:
+    """
+    Menjalankan Apriori dan FP-Growth pada Author-Based Transactional Database
+    untuk setiap nilai minimum support (0.1%, 0.5%, 1%, 2%), memverifikasi kesamaan
+    itemsets & rules, serta mencatat runtime dan peak memory secara adil.
+    """
+    output_dir.mkdir(exist_ok=True)
+    n_total = X_author.shape[0]
+    benchmark_rows = []
+    results_by_sup = {}
+
+    for s in min_supports:
+        sup_pct = f"{s * 100:.1f}%"
+        sup_tag = f"{s * 100:.1f}pct".replace(".", "_")
+        print(f"\n{'=' * 78}")
+        print(f"Eksperimen Min Support = {sup_pct} (min_count >= {math.ceil(s * n_total - 1e-12):,} dari {n_total:,} author)")
+        print(f"{'=' * 78}")
+
+        t_proj0 = time.perf_counter()
+        df_active, n_tot, n_act, min_count, s_adj = _project_active_matrix(X_author, unique_venues, s)
+        t_proj = time.perf_counter() - t_proj0
+        n_cand_cols = df_active.shape[1]
+        print(f"[Proyeksi Eksak] {n_act:,} author aktif x {n_cand_cols} venue kandidat ({t_proj:.2f}s)")
+
+        if df_active.empty:
+            fi_fp = _rescale_itemsets(pd.DataFrame(), 0, n_tot, min_count, venue_display_map)
+            fi_ap = fi_fp.copy()
+            t_fp = t_ap = mem_fp_mb = mem_ap_mb = 0.0
+            rules_fp = _generate_rules_safe(fi_fp, min_confidence, venue_display_map)
+            rules_ap = rules_fp.copy()
+            is_identical = True
+            max_sup_diff = 0.0
+        else:
+            # --- 1. FP-GROWTH ---
+            gc.collect()
+            tracemalloc.start()
+            t0 = time.perf_counter()
+            raw_fp = fpgrowth(df_active, min_support=s_adj, use_colnames=True)
+            t_fp = time.perf_counter() - t0
+            _, peak_fp = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            mem_fp_mb = peak_fp / (1024 * 1024)
+            fi_fp = _rescale_itemsets(raw_fp, n_act, n_tot, min_count, venue_display_map)
+            del raw_fp
+
+            # --- 2. APRIORI (low_memory=True agar tidak OOM pada 1.7M transaksi) ---
+            gc.collect()
+            tracemalloc.start()
+            t0 = time.perf_counter()
+            raw_ap = apriori(df_active, min_support=s_adj, use_colnames=True, low_memory=True)
+            t_ap = time.perf_counter() - t0
+            _, peak_ap = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            mem_ap_mb = peak_ap / (1024 * 1024)
+            fi_ap = _rescale_itemsets(raw_ap, n_act, n_tot, min_count, venue_display_map)
+            del raw_ap
+
+            # Verifikasi kesamaan matematis eksak (itemsets DAN nilai support)
+            map_fp = dict(zip(fi_fp["itemsets"].apply(frozenset), fi_fp["support"]))
+            map_ap = dict(zip(fi_ap["itemsets"].apply(frozenset), fi_ap["support"]))
+            same_sets = set(map_fp.keys()) == set(map_ap.keys())
+            max_sup_diff = (
+                max((abs(map_fp[k] - map_ap[k]) for k in map_fp), default=0.0)
+                if same_sets
+                else float("inf")
+            )
+            is_identical = bool(same_sets and max_sup_diff < 1e-12)
+
+            # Association rules (min_confidence = 50%) untuk kedua algoritma
+            rules_fp = _generate_rules_safe(fi_fp, min_confidence, venue_display_map)
+            rules_ap = _generate_rules_safe(fi_ap, min_confidence, venue_display_map)
+
+            del df_active
+            gc.collect()
+
+        c1 = int((fi_fp["length"] == 1).sum())
+        c2 = int((fi_fp["length"] == 2).sum())
+        c3 = int((fi_fp["length"] == 3).sum())
+        c4p = int((fi_fp["length"] >= 4).sum())
+
+        benchmark_rows.append({
+            "min_support_pct": sup_pct,
+            "min_support": s,
+            "min_count": min_count,
+            "active_authors": n_act,
+            "itemsets_apriori": len(fi_ap),
+            "itemsets_fpgrowth": len(fi_fp),
+            "itemsets_identical": is_identical,
+            "max_support_diff": max_sup_diff,
+            "n_1_itemsets": c1,
+            "n_2_itemsets": c2,
+            "n_3_itemsets": c3,
+            "n_4plus_itemsets": c4p,
+            "rules_apriori_conf50": len(rules_ap),
+            "rules_fpgrowth_conf50": len(rules_fp),
+            "runtime_apriori_s": round(t_ap, 4),
+            "runtime_fpgrowth_s": round(t_fp, 4),
+            "speedup_ap_over_fp": round(t_ap / t_fp, 2) if t_fp > 0 else np.nan,
+            "peak_ram_apriori_mb": round(mem_ap_mb, 2),
+            "peak_ram_fpgrowth_mb": round(mem_fp_mb, 2),
+        })
+
+        results_by_sup[s] = {
+            "fi_fp": fi_fp,
+            "fi_ap": fi_ap,
+            "rules_fp": rules_fp,
+            "rules_ap": rules_ap,
         }
 
-        # Tampilkan 10 Top Itemsets untuk min support ini
-        print(f"\n[Top 10 Frequent Itemsets - Support {sup_pct}]")
-        top10 = fpm_results[s]["fp_itemsets"].head(10)[["support", "itemsets", "length"]].copy()
-        top10["itemsets"] = top10["itemsets"].apply(lambda x: ", ".join(list(x)))
-        print(top10.to_string(index=False))
+        print(
+            f"  Itemsets: FP={len(fi_fp):,} | Apriori={len(fi_ap):,} | Identik={is_identical} "
+            f"(1-item={c1}, 2-item={c2}, 3-item={c3}, >=4-item={c4p})"
+        )
+        print(
+            f"  Rules (conf>=50%): FP={len(rules_fp):,} | Apriori={len(rules_ap):,}"
+        )
+        print(
+            f"  Runtime: Apriori={t_ap:.4f}s vs FP-Growth={t_fp:.4f}s | "
+            f"Peak RAM: Apriori={mem_ap_mb:.2f} MB vs FP-Growth={mem_fp_mb:.2f} MB"
+        )
 
-    benchmark_df = pd.DataFrame(benchmark_records)
-    print("\n" + "="*80)
-    print("TABEL RINGKASAN BENCHMARK PERFORMA (TASK 4 & TASK 6)")
-    print("="*80)
-    cols_display = [
-        "Min Support", "Total Itemsets (FP)", "1-itemsets", "2-itemsets", "3-itemsets",
-        "Total Rules (Conf 50%)", "Runtime FP-Growth (s)", "Runtime Apriori (s)", "Speedup (Apriori/FP)",
-        "Peak RAM FP-Growth (MB)", "Peak RAM Apriori (MB)", "Itemsets Identik"
-    ]
-    print(benchmark_df[cols_display].to_string(index=False))
+        if save_artifacts and not fi_fp.empty:
+            fi_fp[["support", "count", "length", "itemsets_keys", "itemsets_names"]].to_csv(
+                output_dir / f"task4_itemsets_{sup_tag}.csv", index=False
+            )
 
-    plot_performance_comparison(benchmark_df)
+    benchmark_df = pd.DataFrame(benchmark_rows)
+    print("\n" + "=" * 78)
+    print("RINGKASAN BENCHMARK TASK 4 & TASK 6")
+    print("=" * 78)
+    print(benchmark_df.to_string(index=False))
 
-    return fpm_results, benchmark_df
+    if save_artifacts:
+        benchmark_df.to_csv(output_dir / "task6_performance_comparison.csv", index=False)
+        plot_task4_sensitivity(benchmark_df, output_dir / "task4_support_sensitivity.png")
+        plot_task6_comparison(benchmark_df, output_dir / "task6_algorithm_performance_comparison.png")
+
+    return results_by_sup, benchmark_df
 
 
-def plot_performance_comparison(benchmark_df):
-    """Menghasilkan grafik visual komparasi performa Apriori vs FP-Growth."""
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+def plot_task4_sensitivity(benchmark_df: pd.DataFrame, out_path: Path):
+    """Plot pengaruh perubahan minimum support terhadap jumlah frequent itemsets per ukuran k."""
+    fig, ax = plt.subplots(figsize=(9.5, 5))
+    x = benchmark_df["min_support_pct"].tolist()
 
-    x_labels = benchmark_df["Min Support"].tolist()
+    ax.plot(x, benchmark_df["itemsets_fpgrowth"], marker="o", linewidth=2.5, markersize=8, color="#1B365D", label="Total Frequent Itemsets")
+    ax.plot(x, benchmark_df["n_1_itemsets"], marker="s", linewidth=2, linestyle="--", color="#2B6CB0", label="1-itemsets")
+    ax.plot(x, benchmark_df["n_2_itemsets"], marker="^", linewidth=2, linestyle="-.", color="#C05621", label="2-itemsets")
+    ax.plot(x, benchmark_df["n_3_itemsets"], marker="D", linewidth=2, linestyle=":", color="#276749", label="3-itemsets")
+
+    for i, val in enumerate(benchmark_df["itemsets_fpgrowth"]):
+        ax.annotate(f"{int(val):,}", (x[i], val), textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8.5, fontweight="bold")
+
+    ax.set_title("Pengaruh Minimum Support terhadap Jumlah Frequent Itemsets (DBLP 2015-2025)", fontsize=11, fontweight="bold")
+    ax.set_xlabel("Minimum Support Threshold")
+    ax.set_ylabel("Jumlah Frequent Itemsets")
+    if benchmark_df["itemsets_fpgrowth"].max() > 20 * max(1, benchmark_df["itemsets_fpgrowth"].min()):
+        ax.set_yscale("symlog", linthresh=10)
+    ax.grid(True, linestyle="--", alpha=0.55)
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+    print(f"[Visualisasi] Disimpan ke: {out_path}")
+
+
+def plot_task6_comparison(benchmark_df: pd.DataFrame, out_path: Path):
+    """Grafik 3-panel komparasi performa Apriori vs FP-Growth (Task 6)."""
+    fig, axes = plt.subplots(1, 3, figsize=(17, 5))
+    x_labels = benchmark_df["min_support_pct"].tolist()
     x = np.arange(len(x_labels))
-    width = 0.35
+    w = 0.35
 
-    # Runtime Comparison
-    axes[0].bar(x - width/2, benchmark_df["Runtime Apriori (s)"], width, label="Apriori", color="#E53E3E")
-    axes[0].bar(x + width/2, benchmark_df["Runtime FP-Growth (s)"], width, label="FP-Growth", color="#3182CE")
-    axes[0].set_title("Runtime Comparison (Detik)", fontsize=11, fontweight="bold")
+    # Panel 1: Runtime
+    b1 = axes[0].bar(x - w / 2, benchmark_df["runtime_apriori_s"], w, label="Apriori", color="#C53030", edgecolor="black", alpha=0.88)
+    b2 = axes[0].bar(x + w / 2, benchmark_df["runtime_fpgrowth_s"], w, label="FP-Growth", color="#2B6CB0", edgecolor="black", alpha=0.88)
+    axes[0].set_title("Waktu Eksekusi (Detik)", fontsize=11, fontweight="bold")
     axes[0].set_xlabel("Minimum Support")
-    axes[0].set_ylabel("Waktu Eksekusi (Detik)")
+    axes[0].set_ylabel("Runtime (s)")
     axes[0].set_xticks(x)
     axes[0].set_xticklabels(x_labels)
     axes[0].legend()
-    axes[0].grid(axis="y", linestyle="--", alpha=0.6)
+    axes[0].grid(axis="y", linestyle="--", alpha=0.55)
+    for bar in list(b1) + list(b2):
+        h = bar.get_height()
+        axes[0].text(bar.get_x() + bar.get_width() / 2, h, f"{h:.2f}s", ha="center", va="bottom", fontsize=7.5)
 
-    # Peak Memory Comparison
-    axes[1].bar(x - width/2, benchmark_df["Peak RAM Apriori (MB)"], width, label="Apriori", color="#DD6B20")
-    axes[1].bar(x + width/2, benchmark_df["Peak RAM FP-Growth (MB)"], width, label="FP-Growth", color="#38A169")
-    axes[1].set_title("Peak Memory Usage (MB)", fontsize=11, fontweight="bold")
+    # Panel 2: Peak Memory
+    m1 = axes[1].bar(x - w / 2, benchmark_df["peak_ram_apriori_mb"], w, label="Apriori", color="#DD6B20", edgecolor="black", alpha=0.88)
+    m2 = axes[1].bar(x + w / 2, benchmark_df["peak_ram_fpgrowth_mb"], w, label="FP-Growth", color="#2F855A", edgecolor="black", alpha=0.88)
+    axes[1].set_title("Puncak Penggunaan Memori (MB)", fontsize=11, fontweight="bold")
     axes[1].set_xlabel("Minimum Support")
-    axes[1].set_ylabel("Penggunaan Memori (MB)")
+    axes[1].set_ylabel("Peak RAM (MB)")
     axes[1].set_xticks(x)
     axes[1].set_xticklabels(x_labels)
     axes[1].legend()
-    axes[1].grid(axis="y", linestyle="--", alpha=0.6)
+    axes[1].grid(axis="y", linestyle="--", alpha=0.55)
+    for bar in list(m1) + list(m2):
+        h = bar.get_height()
+        axes[1].text(bar.get_x() + bar.get_width() / 2, h, f"{h:.1f}", ha="center", va="bottom", fontsize=7.5)
 
-    # Itemsets & Rules Count
-    axes[2].plot(x_labels, benchmark_df["Total Itemsets (FP)"], marker="o", linewidth=2.5, color="#805AD5", label="Frequent Itemsets")
-    axes[2].plot(x_labels, benchmark_df["Total Rules (Conf 50%)"], marker="s", linewidth=2.5, color="#D69E2E", label="Rules (Conf >= 50%)")
+    # Panel 3: Frequent Itemsets & Association Rules
+    axes[2].plot(x_labels, benchmark_df["itemsets_fpgrowth"], marker="o", linewidth=2.5, color="#6B46C1", label="Frequent Itemsets (Identik)")
+    axes[2].plot(x_labels, benchmark_df["rules_fpgrowth_conf50"], marker="s", linewidth=2.5, color="#D69E2E", label="Association Rules (Conf >= 50%)")
     axes[2].set_title("Jumlah Itemsets & Rules vs Min Support", fontsize=11, fontweight="bold")
     axes[2].set_xlabel("Minimum Support")
-    axes[2].set_ylabel("Jumlah Himpunan")
+    axes[2].set_ylabel("Jumlah Pola / Rules")
+    if max(benchmark_df["itemsets_fpgrowth"].max(), benchmark_df["rules_fpgrowth_conf50"].max()) > 50:
+        axes[2].set_yscale("symlog", linthresh=5)
     axes[2].legend()
-    axes[2].grid(True, linestyle="--", alpha=0.6)
+    axes[2].grid(True, linestyle="--", alpha=0.55)
 
     plt.tight_layout()
-    chart_path = OUTPUT_DIR / "task6_algorithm_performance_comparison.png"
-    plt.savefig(chart_path, dpi=300)
+    plt.savefig(out_path, dpi=200)
     plt.close()
-    print(f"\n[Visualisasi] Grafik perbandingan performa disimpan ke: {chart_path}")
+    print(f"[Visualisasi] Disimpan ke: {out_path}")
 
 
 # ==============================================================================
-# TASK 5: ASSOCIATION RULE MINING
+# TASK 5: ASSOCIATION RULE MINING & ANALISIS SUPPORT VS LIFT
 # ==============================================================================
-def run_association_rule_mining(fpm_results, target_support=0.001):
+def analyze_association_rules(
+    results_by_sup: dict,
+    target_support: float = 0.001,
+    output_dir: Path = OUTPUT_DIR,
+    save_artifacts: bool = True,
+) -> dict:
     """
-    Membangkitkan dan menganalisis Association Rules dari Frequent Itemsets
-    menggunakan minimum confidence 50%.
-    Menghitung Support, Confidence, dan Lift serta mengekstrak 10 rules dengan Lift tertinggi.
+    Menganalisis Association Rules (min confidence 50%) dari frequent itemsets
+    pada target_support (default 0.1% — paling kaya pola), menampilkan Top 10 Lift,
+    dan menguji korelasi Support vs Lift.
     """
-    print("\n" + "="*80)
-    print("TASK 5: ASSOCIATION RULE MINING (MIN CONFIDENCE 50%)")
-    print("="*80)
+    output_dir.mkdir(exist_ok=True)
+    rules = results_by_sup[target_support]["rules_fp"].copy()
 
-    if target_support in fpm_results and not fpm_results[target_support]["fp_itemsets"].empty:
-        fi = fpm_results[target_support]["fp_itemsets"]
-        used_sup = target_support
-    else:
-        used_sup = min(fpm_results.keys())
-        fi = fpm_results[used_sup]["fp_itemsets"]
-
-    print(f"[Rules] Membangkitkan aturan asosiasi dari {len(fi)} frequent itemsets (Min Support: {used_sup*100:.1f}%)...")
-    rules = association_rules(fi, metric="confidence", min_threshold=0.50)
+    print("\n" + "=" * 78)
+    print(f"TASK 5: ASSOCIATION RULE MINING (Min Support={target_support*100:.1f}%, Min Confidence=50%)")
+    print("=" * 78)
+    print(f"Total association rules dihasilkan: {len(rules):,}")
 
     if rules.empty:
-        print("[Rules] Tidak ada aturan asosiasi yang memenuhi threshold confidence 50%.")
-        return pd.DataFrame()
+        print("Tidak ada aturan asosiasi yang memenuhi confidence >= 50% pada level support ini.")
+        return {"rules": rules, "top10_lift": pd.DataFrame(), "top10_support": pd.DataFrame(), "corr": {}}
 
-    rules["antecedents_str"] = rules["antecedents"].apply(lambda s: "{" + ", ".join(list(s)) + "}")
-    rules["consequents_str"] = rules["consequents"].apply(lambda s: "{" + ", ".join(list(s)) + "}")
-    rules["rule_str"] = rules["antecedents_str"] + " -> " + rules["consequents_str"]
+    cols_export = [
+        "rule_names", "rule_keys", "antecedent support", "consequent support",
+        "support", "confidence", "lift", "leverage", "conviction",
+    ]
+    cols_export = [c for c in cols_export if c in rules.columns]
 
-    rules_sorted_lift = rules.sort_values(by="lift", ascending=False).reset_index(drop=True)
-    top10_lift = rules_sorted_lift.head(10).copy()
+    top10_lift = rules.head(10)[cols_export].copy()
+    top10_support = rules.sort_values(by=["support", "lift"], ascending=[False, False]).head(10)[cols_export].copy()
 
-    cols_show = ["rule_str", "support", "confidence", "lift"]
     print("\n--- TOP 10 ASSOCIATION RULES BERDASARKAN LIFT TERTINGGI ---")
-    print(top10_lift[cols_show].to_string(index=False))
+    print(top10_lift[["rule_names", "support", "confidence", "lift"]].to_string(index=False))
 
-    print("\n--- ANALISIS KORELASI SUPPORT VS LIFT ---")
-    corr = rules["support"].corr(rules["lift"])
-    print(f"Koefisien Korelasi Pearson antara Support dan Lift: {corr:.4f}")
-    if corr < 0:
-        print("KESIMPULAN: Korelasi negatif! Aturan dengan Lift tertinggi cenderung memiliki support lebih rendah/sedang,")
-        print("membuktikan bahwa konferensi spesialis/eksklusif menghasilkan Lift jauh lebih tinggi dibanding konferensi umum.")
+    print("\n--- TOP 10 ASSOCIATION RULES BERDASARKAN SUPPORT TERTINGGI (PEMBANDING) ---")
+    print(top10_support[["rule_names", "support", "confidence", "lift"]].to_string(index=False))
 
-    # Visualisasi Bar Chart Top 10 Rules Lift
-    plt.figure(figsize=(10, 6))
-    y_pos = np.arange(len(top10_lift))
-    plt.barh(y_pos, top10_lift["lift"], color="#276749", edgecolor="black", alpha=0.85)
-    plt.yticks(y_pos, top10_lift["rule_str"], fontsize=9)
-    plt.gca().invert_yaxis()  # Lift tertinggi di atas
-    plt.title("Top 10 Association Rules Berdasarkan Nilai Lift (Min Conf 50%)", fontsize=11, fontweight="bold")
-    plt.xlabel("Nilai Lift")
-    plt.grid(axis="x", linestyle="--", alpha=0.6)
+    corr_info = {}
+    if len(rules) >= 3:
+        r_pearson = float(rules["support"].corr(rules["lift"]))
+        r_spearman, p_spearman = spearmanr(rules["support"], rules["lift"])
+        r_conseq_spearman, p_conseq = spearmanr(rules["consequent support"], rules["lift"])
+        corr_info = {
+            "pearson_support_lift": r_pearson,
+            "spearman_support_lift": float(r_spearman),
+            "spearman_p_value": float(p_spearman),
+            "spearman_consequent_support_lift": float(r_conseq_spearman),
+            "spearman_consequent_p_value": float(p_conseq),
+        }
+        print("\n--- ANALISIS KORELASI SUPPORT VS LIFT ---")
+        print(f"Pearson (Support vs Lift)            : {r_pearson:.4f}")
+        print(f"Spearman (Support vs Lift)           : {r_spearman:.4f} (p = {p_spearman:.2e})")
+        print(f"Spearman (Consequent Supp vs Lift)   : {r_conseq_spearman:.4f} (p = {p_conseq:.2e})")
 
-    for i, v in enumerate(top10_lift["lift"]):
-        plt.text(v + 0.1, i, f"{v:.2f}", va="center", fontsize=8.5, fontweight="bold", color="#1A365D")
+    if save_artifacts:
+        rules[cols_export].to_csv(output_dir / "task5_association_rules.csv", index=False)
+        top10_lift.to_csv(output_dir / "task5_top10_lift_rules.csv", index=False)
+        plot_task5_rules(rules, top10_lift, output_dir)
 
+    return {
+        "rules": rules,
+        "top10_lift": top10_lift,
+        "top10_support": top10_support,
+        "corr": corr_info,
+    }
+
+
+def plot_task5_rules(rules: pd.DataFrame, top10_lift: pd.DataFrame, output_dir: Path):
+    """Plot Top 10 Rules by Lift dan Scatter Plot Support vs Lift."""
+    # 1. Top 10 Lift Bar Chart
+    fig, ax = plt.subplots(figsize=(11, 5.8))
+    y = np.arange(len(top10_lift))
+    bars = ax.barh(y, top10_lift["lift"], color="#276749", edgecolor="black", alpha=0.88)
+    ax.set_yticks(y)
+    ax.set_yticklabels(top10_lift["rule_names"], fontsize=9)
+    ax.invert_yaxis()
+    ax.set_title("Top 10 Association Rules Berdasarkan Nilai Lift (Min Support 0.1%, Min Conf 50%)", fontsize=11, fontweight="bold")
+    ax.set_xlabel("Nilai Lift")
+    ax.grid(axis="x", linestyle="--", alpha=0.55)
+
+    max_lift = float(top10_lift["lift"].max())
+    ax.set_xlim(0, max_lift * 1.25)
+    for bar, (_, row) in zip(bars, top10_lift.iterrows()):
+        w = bar.get_width()
+        ax.text(
+            w + max_lift * 0.015,
+            bar.get_y() + bar.get_height() / 2,
+            f"Lift={w:.2f} | Conf={row['confidence']*100:.1f}% | Supp={row['support']*100:.2f}%",
+            va="center",
+            fontsize=8,
+            fontweight="bold",
+            color="#1A365D",
+        )
     plt.tight_layout()
-    rules_plot_path = OUTPUT_DIR / "task5_top10_rules_lift.png"
-    plt.savefig(rules_plot_path, dpi=300)
+    p1 = output_dir / "task5_top10_rules_lift.png"
+    plt.savefig(p1, dpi=200)
     plt.close()
-    print(f"\n[Visualisasi] Plot Top 10 Rules Lift disimpan ke: {rules_plot_path}")
+    print(f"[Visualisasi] Disimpan ke: {p1}")
 
-    # Simpan hasil rules ke CSV
-    rules_csv_path = OUTPUT_DIR / "association_rules_top_lift.csv"
-    rules_sorted_lift[cols_show].to_csv(rules_csv_path, index=False)
-    print(f"[Export] Seluruh rules disimpan ke: {rules_csv_path}")
-
-    return rules_sorted_lift
+    # 2. Scatter Support vs Lift
+    fig, ax = plt.subplots(figsize=(9, 5.2))
+    sc = ax.scatter(
+        rules["support"] * 100.0,
+        rules["lift"],
+        c=rules["confidence"] * 100.0,
+        cmap="viridis",
+        alpha=0.75,
+        edgecolors="black",
+        linewidths=0.4,
+        s=45,
+    )
+    cbar = plt.colorbar(sc, ax=ax)
+    cbar.set_label("Confidence (%)")
+    ax.set_title("Hubungan Support vs Lift pada Association Rules (Min Conf 50%)", fontsize=11, fontweight="bold")
+    ax.set_xlabel("Support (%)")
+    ax.set_ylabel("Lift")
+    ax.grid(True, linestyle="--", alpha=0.5)
+    plt.tight_layout()
+    p2 = output_dir / "task5_support_vs_lift.png"
+    plt.savefig(p2, dpi=200)
+    plt.close()
+    print(f"[Visualisasi] Disimpan ke: {p2}")
 
 
 # ==============================================================================
 # PIPELINE UTAMA ROLE 2
 # ==============================================================================
-def execute_role2_pipeline():
-    """Menjalankan seluruh alur kerja Role 2 secara otomatis."""
-    print("="*80)
-    print("PIPELINE EKSEKUSI TUGAS DATA MINING: ROLE 2")
-    print("DataMining_Kelompok11 - Branch Role2")
-    print("="*80)
+def execute_role2_pipeline(verify_hash: bool = True) -> dict:
+    """Menjalankan seluruh pipeline Role 2 (Task 3, 4, 5, 6) pada clean_inproceedings.parquet."""
+    t_start = time.perf_counter()
+    print("=" * 78)
+    print("PIPELINE ROLE 2 — TASK 3, TASK 4, TASK 5, TASK 6 (DBLP 2015-2025)")
+    print("=" * 78)
 
-    # 1. Load Data
-    df = load_clean_data()
+    df, meta_info = load_clean_data(verify_hash=verify_hash)
+    venue_name_map, venue_display_map = build_venue_label_map(df)
 
-    # 2. Task 3: Transactional Database Construction
-    author_tx, author_year_tx, stats_df = construct_transactional_databases(df)
+    # Task 3
+    t3 = construct_transactional_databases(df, venue_display_map, OUTPUT_DIR, save_artifacts=True)
+    del df
+    gc.collect()
 
-    # 3. Task 4 & Task 6: Frequent Pattern Mining & Benchmarking
-    fpm_results, benchmark_df = run_frequent_pattern_mining(
-        author_tx,
-        min_supports=[0.001, 0.005, 0.01, 0.02]
+    # Task 4 & Task 6
+    results_by_sup, benchmark_df = run_fpm_and_benchmark(
+        t3["X_author"],
+        t3["unique_venues"],
+        venue_display_map,
+        min_supports=MIN_SUPPORTS,
+        min_confidence=MIN_CONFIDENCE,
+        output_dir=OUTPUT_DIR,
+        save_artifacts=True,
     )
 
-    # 4. Task 5: Association Rule Mining
-    rules_df = run_association_rule_mining(fpm_results, target_support=0.001)
+    # Task 5
+    t5 = analyze_association_rules(results_by_sup, target_support=0.001, output_dir=OUTPUT_DIR, save_artifacts=True)
 
-    print("\n" + "="*80)
-    print("SEMUA TUGAS ROLE 2 BERHASIL DISELESAIKAN!")
-    print(f"Seluruh gambar visualisasi dan tabel hasil tersimpan di folder: {OUTPUT_DIR.resolve()}")
-    print("="*80)
+    # Simpan ringkasan JSON untuk audit & reproduktibilitas
+    summary_payload = {
+        "source_parquet_meta": meta_info,
+        "task3_stats": t3["stats_raw"],
+        "task6_benchmark": benchmark_df.to_dict(orient="records"),
+        "task5_total_rules_0_1pct": int(len(t5["rules"])),
+        "task5_correlations": t5["corr"],
+        "total_pipeline_seconds": round(time.perf_counter() - t_start, 2),
+    }
+    (OUTPUT_DIR / "role2_summary.json").write_text(
+        json.dumps(summary_payload, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    print(f"\n[SELESAI] Seluruh pipeline Role 2 selesai dalam {summary_payload['total_pipeline_seconds']} detik.")
+    print(f"[OUTPUT] Artefak tersimpan di: {OUTPUT_DIR.resolve()}")
+    return summary_payload
 
 
 if __name__ == "__main__":

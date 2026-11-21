@@ -1,173 +1,160 @@
 """
-Module data_loader.py
-Fungsi memuat dataset DBLP untuk Role 2:
-1. Memeriksa keberadaan data/clean_inproceedings.parquet (jika sudah ada hasil Task 1).
-2. Jika belum ada tapi ada data/raw_inproceedings.parquet, menjalankan pipeline cleaning standar Task 1.
-3. Jika belum ada file parquet di disk (karena file raw belum dicopy dari laptop Role 1),
-   menghasilkan benchmark sample dataset (40.000 paper, 2015-2025) dengan pola kluster konferensi
-   realistis sesuai ekosistem Computer Science DBLP agar seluruh kode Task 3, 4, 5, dan 6
-   dapat langsung dieksekusi, diuji, dan menghasilkan metrik yang valid.
+Module src/data_loader.py
+Loader terverifikasi untuk dataset bersih hasil Task 1 (Role 1 — Notebook-dblp_2025_12_01.ipynb).
+
+Fitur utama:
+1. Membaca `data/clean_inproceedings.parquet` (hanya kolom yang dibutuhkan Role 2 agar hemat RAM).
+2. Memverifikasi ukuran berkas, jumlah baris, dan checksum SHA-256 terhadap `data/clean_summary.json`
+   agar dipastikan berkas yang dipakai berasal dari folder `data_baru/` (bukan parquet versi lama).
+3. Membangun peta label venue 1-ke-1 (`venue_key -> display_label`) yang menangani kemungkinan
+   tabrakan `venue_name` antar `venue_key` berbeda (selaras dengan keputusan T04 Role 1).
 """
 
-from pathlib import Path
+import hashlib
 import json
-import numpy as np
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
 import pandas as pd
 
 DATA_DIR = Path("data")
 CLEAN_PARQUET = DATA_DIR / "clean_inproceedings.parquet"
-RAW_PARQUET = DATA_DIR / "raw_inproceedings.parquet"
-SAMPLE_PARQUET = DATA_DIR / "clean_inproceedings_sample.parquet"
+CLEAN_SUMMARY_JSON = DATA_DIR / "clean_summary.json"
 
-# Kluster Konferensi Realistis DBLP Computer Science
-CONFERENCE_CLUSTERS = {
-    "AI_ML": ["NeurIPS", "ICML", "ICLR", "AAAI", "IJCAI"],
-    "Vision": ["CVPR", "ICCV", "ECCV"],
-    "NLP": ["ACL", "EMNLP", "NAACL", "COLING"],
-    "Data_IR": ["KDD", "SIGIR", "WSDM", "CIKM", "TheWebConf"],
-    "Database": ["SIGMOD", "VLDB", "ICDE", "EDBT"],
-    "Software_Eng": ["ICSE", "FSE", "ASE", "ISSTA"],
-    "Systems_Net": ["OSDI", "SOSP", "SIGCOMM", "NSDI", "FAST"],
-    "Security": ["IEEE S&P", "USENIX Security", "ACM CCS", "NDSS"],
-    "Hardware_Arch": ["ISCA", "MICRO", "ASPLOS", "DAC"],
-    "Theory": ["STOC", "FOCS", "SODA"]
-}
+REQUIRED_COLS = ["paper_key", "author_id", "year", "venue_key", "venue_name"]
 
-def generate_benchmark_sample(n_papers=45_000, seed=42):
-    """Menghasilkan sample dataset realistis DBLP untuk pengujian algoritma Mining."""
-    np.random.seed(seed)
-    DATA_DIR.mkdir(exist_ok=True)
-    
-    clusters = list(CONFERENCE_CLUSTERS.keys())
-    cluster_weights = [0.22, 0.16, 0.12, 0.12, 0.10, 0.08, 0.07, 0.06, 0.04, 0.03]
-    
-    # 15.000 author dengan afiliasi domain riset utama
-    n_authors = 15_000
-    author_domains = np.random.choice(clusters, size=n_authors, p=cluster_weights)
-    author_names = [f"Author_{i:05d}" for i in range(n_authors)]
-    
-    # Berikan nama-nama peneliti terkemuka DBLP untuk realisme
-    famous_authors = [
-        ("Yoshua Bengio", "AI_ML"), ("Geoffrey E. Hinton", "AI_ML"), ("Yann LeCun", "AI_ML"),
-        ("Andrew Y. Ng", "AI_ML"), ("Michael I. Jordan", "AI_ML"), ("Bernhard Schölkopf", "AI_ML"),
-        ("Kaiming He", "Vision"), ("Jitendra Malik", "Vision"), ("Trevor Darrell", "Vision"),
-        ("Christopher D. Manning", "NLP"), ("Dan Jurafsky", "NLP"), ("Yoav Goldberg", "NLP"),
-        ("Jiawei Han 0001", "Data_IR"), ("Philip S. Yu", "Data_IR"), ("Jure Leskovec", "Data_IR"),
-        ("Michael Stonebraker", "Database"), ("Hector Garcia-Molina", "Database"), ("Gerhard Weikum", "Database"),
-        ("David A. Patterson", "Hardware_Arch"), ("John L. Hennessy", "Hardware_Arch"),
-        ("Ion Stoica", "Systems_Net"), ("Matei Zaharia", "Systems_Net"), ("Scott Shenker", "Systems_Net"),
-        ("Dan Boneh", "Security"), ("Dawn Song", "Security"), ("Adi Shamir", "Security"),
-        ("Martin Rinard", "Software_Eng"), ("Premkumar T. Devanbu", "Software_Eng")
-    ]
-    for idx, (name, dom) in enumerate(famous_authors):
-        author_names[idx] = name
-        author_domains[idx] = dom
-        
-    papers = []
-    years = list(range(2015, 2026))
-    year_weights = [0.06, 0.06, 0.07, 0.08, 0.09, 0.09, 0.10, 0.10, 0.11, 0.12, 0.12]
-    
-    # Buat pool author per domain
-    domain_to_authors = {}
-    for dom in clusters:
-        domain_to_authors[dom] = [author_names[i] for i, d in enumerate(author_domains) if d == dom]
-        
-    for p_id in range(n_papers):
-        # Pilih domain paper
-        dom = np.random.choice(clusters, p=cluster_weights)
-        venue = np.random.choice(CONFERENCE_CLUSTERS[dom])
-        year = int(np.random.choice(years, p=year_weights))
-        
-        # 1-6 author per paper
-        team_size = np.random.choice([1, 2, 3, 4, 5, 6], p=[0.08, 0.22, 0.32, 0.22, 0.11, 0.05])
-        
-        # 85% author dari domain yang sama, 15% kolaborator lintas bidang
-        paper_authors = []
-        for _ in range(team_size):
-            if np.random.rand() < 0.85 or len(domain_to_authors[dom]) == 0:
-                chosen = np.random.choice(domain_to_authors[dom])
-            else:
-                other_dom = np.random.choice(clusters)
-                chosen = np.random.choice(domain_to_authors[other_dom])
-            if chosen not in paper_authors:
-                paper_authors.append(chosen)
-                
-        papers.append({
-            "paper_key": f"conf/{venue.lower()}/{p_id}_{year}",
-            "authors": paper_authors,
-            "title": f"Advancements in {venue} Research: Paper #{p_id}",
-            "year": year,
-            "venue": venue
-        })
-        
-    df_sample = pd.DataFrame(papers)
-    df_sample.to_parquet(SAMPLE_PARQUET, index=False)
-    print(f"[DataLoader] Generated sample dataset: {len(df_sample):,} records saved to {SAMPLE_PARQUET}")
-    return df_sample
 
-def load_clean_data():
+def compute_sha256(path: Path, block_size: int = 4 * 1024 * 1024) -> str:
+    """Menghitung SHA-256 berkas secara streaming (hemat RAM)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(block_size):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def load_clean_summary(summary_path: Path = CLEAN_SUMMARY_JSON) -> Optional[dict]:
+    """Membaca metadata `clean_summary.json` hasil ekspor T06 Role 1 jika tersedia."""
+    if summary_path.is_file():
+        return json.loads(summary_path.read_text(encoding="utf-8"))
+    return None
+
+
+def verify_clean_parquet(
+    parquet_path: Path = CLEAN_PARQUET,
+    summary_path: Path = CLEAN_SUMMARY_JSON,
+    verify_hash: bool = True,
+) -> dict:
     """
-    Memuat dataset bersih:
-    - Jika clean_inproceedings.parquet ada, gunakan langsung.
-    - Jika raw_inproceedings.parquet ada, lakukan cleaning cepat Task 1 dan simpan.
-    - Jika tidak ada, gunakan/buat sample dataset.
+    Memastikan `clean_inproceedings.parquet` ada dan sesuai dengan `clean_summary.json`.
+    Mengembalikan ringkasan status verifikasi.
     """
-    if CLEAN_PARQUET.exists():
-        print(f"[DataLoader] Memuat dataset bersih dari: {CLEAN_PARQUET}")
-        return pd.read_parquet(CLEAN_PARQUET)
-        
-    if RAW_PARQUET.exists():
-        print(f"[DataLoader] Ditemukan raw data di {RAW_PARQUET}. Menjalankan cleaning Task 1...")
-        df_raw = pd.read_parquet(RAW_PARQUET)
-        
-        # 1. Filter conference prefix
-        df = df_raw[df_raw["key_prefix"] == "conf"].copy()
-        
-        # 2. Drop missing values
-        df["authors"] = df["authors"].map(lambda L: [a.strip() for a in L if a and str(a).strip()])
-        mask_valid = (
-            (df["authors"].str.len() > 0) &
-            (df["booktitle"].notna()) & (df["booktitle"].str.strip() != "") &
-            (df["venue_key"].notna()) & (df["venue_key"].str.strip() != "") &
-            (df["year_raw"].notna())
+    if not parquet_path.is_file():
+        raise FileNotFoundError(
+            f"Berkas dataset bersih tidak ditemukan di: {parquet_path.resolve()}\n"
+            "Langkah perbaikan:\n"
+            "  1. Buka Google Drive tim -> masuk ke folder `data_baru/`.\n"
+            "  2. Unduh `clean_inproceedings.parquet` (~205 MB).\n"
+            f"  3. Simpan ke: {parquet_path.resolve()}"
         )
-        df = df[mask_valid].copy()
-        
-        # 3. Normalisasi Tahun
-        df["year"] = pd.to_numeric(df["year_raw"], errors="coerce").astype("Int64")
-        df = df[(df["year"] >= 2015) & (df["year"] <= 2025)].copy()
-        df["year"] = df["year"].astype(int)
-        
-        # 4. Normalisasi Venue (standard uppercase acronym)
-        # Utamakan booktitle yang sudah bersih, atau venue_key
-        def clean_venue(row):
-            bt = str(row["booktitle"]).strip()
-            # Bersihkan imbuhan tahun/volume jika ada
-            bt_clean = bt.split("'")[0].split("20")[0].strip()
-            return bt_clean.upper() if len(bt_clean) >= 2 else str(row["venue_key"]).upper()
-            
-        df["venue"] = df.apply(clean_venue, axis=1)
-        
-        # 5. Drop duplikat persis
-        df = df.drop_duplicates(subset=["paper_key"]).copy()
-        
-        # Simpan hasil clean
-        df_out = df[["paper_key", "authors", "title", "year", "venue"]].copy()
-        df_out.to_parquet(CLEAN_PARQUET, index=False)
-        print(f"[DataLoader] Preprocessing selesai. Disimpan ke {CLEAN_PARQUET} ({len(df_out):,} baris)")
-        return df_out
-        
-    if SAMPLE_PARQUET.exists():
-        print(f"[DataLoader] Memuat benchmark sample dataset dari: {SAMPLE_PARQUET}")
-        return pd.read_parquet(SAMPLE_PARQUET)
-        
-    print("[DataLoader] File raw_inproceedings.parquet belum ada di folder data/.")
-    print("[DataLoader] Membuat benchmark sample dataset untuk pengujian Role 2...")
-    return generate_benchmark_sample()
+
+    size_bytes = parquet_path.stat().st_size
+    summary = load_clean_summary(summary_path)
+
+    info = {
+        "path": str(parquet_path),
+        "size_bytes": size_bytes,
+        "sha256": None,
+        "expected_sha256": summary.get("clean_parquet_sha256") if summary else None,
+        "hash_match": None,
+        "expected_rows": summary.get("n_papers_clean") if summary else None,
+        "expected_unique_authors": summary.get("n_unique_authors") if summary else None,
+        "expected_unique_venues": summary.get("n_unique_venues_all") if summary else None,
+    }
+
+    if verify_hash:
+        actual_sha = compute_sha256(parquet_path)
+        info["sha256"] = actual_sha
+        if info["expected_sha256"]:
+            info["hash_match"] = actual_sha == info["expected_sha256"]
+            if not info["hash_match"]:
+                raise ValueError(
+                    "PERINGATAN: SHA-256 `clean_inproceedings.parquet` TIDAK COCOK dengan `data/clean_summary.json`!\n"
+                    f"  Aktual     : {actual_sha} ({size_bytes:,} bytes)\n"
+                    f"  Seharusnya : {info['expected_sha256']} ({summary.get('clean_parquet_size_bytes', 0):,} bytes)\n"
+                    "Kemungkinan Anda mengunduh `clean_inproceedings.parquet` versi lama (di luar folder `data_baru/`).\n"
+                    "Pastikan Anda mengunduh berkas dari dalam folder `data_baru/`!"
+                )
+
+    return info
+
+
+def build_venue_label_map(df: pd.DataFrame) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """
+    Membangun pemetaan:
+    - `venue_name_map`: `venue_key -> venue_name` (asli dari T04 Role 1).
+    - `venue_display_map`: `venue_key -> label tampil bebas ambiguitas`.
+      Jika ada dua `venue_key` berbeda yang memiliki `venue_name` sama (mis. `ICC`),
+      label didisambiguasi menjadi `venue_name [venue_key]` agar tidak tertukar di tabel/grafik.
+    """
+    pairs = df[["venue_key", "venue_name"]].drop_duplicates().reset_index(drop=True)
+    assert int(pairs.groupby("venue_key")["venue_name"].nunique().max()) == 1, (
+        "Pemetaan venue_key -> venue_name harus 1-ke-1!"
+    )
+
+    venue_name_map = dict(zip(pairs["venue_key"], pairs["venue_name"]))
+    name_freq = pairs["venue_name"].value_counts()
+    dup_names = set(name_freq[name_freq > 1].index)
+
+    venue_display_map = {
+        vk: (f"{vn} [{vk}]" if vn in dup_names else vn)
+        for vk, vn in venue_name_map.items()
+    }
+    return venue_name_map, venue_display_map
+
+
+def load_clean_data(
+    parquet_path: Path = CLEAN_PARQUET,
+    summary_path: Path = CLEAN_SUMMARY_JSON,
+    columns: Optional[List[str]] = None,
+    verify_hash: bool = True,
+) -> Tuple[pd.DataFrame, dict]:
+    """
+    Memuat `clean_inproceedings.parquet` beserta hasil verifikasi integritasnya.
+    Default hanya membaca kolom yang relevan untuk Role 2 agar hemat RAM.
+    """
+    info = verify_clean_parquet(parquet_path, summary_path, verify_hash=verify_hash)
+
+    cols_to_read = columns if columns is not None else [
+        "paper_key",
+        "author_id",
+        "year",
+        "venue_key",
+        "venue_name",
+        "in_conf_prefix",
+        "is_workshop",
+    ]
+    df = pd.read_parquet(parquet_path, columns=cols_to_read)
+
+    missing = [c for c in REQUIRED_COLS if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"Kolom wajib tidak ditemukan pada parquet: {missing}. "
+            f"Kolom tersedia: {list(df.columns)}"
+        )
+
+    if info["expected_rows"] is not None:
+        assert len(df) == info["expected_rows"], (
+            f"Jumlah baris ({len(df):,}) tidak sesuai clean_summary.json ({info['expected_rows']:,})"
+        )
+
+    print(f"[DataLoader] PASS - Memuat {parquet_path} ({len(df):,} publikasi bersih)")
+    if info["hash_match"]:
+        print(f"[DataLoader] PASS - SHA-256 terverifikasi cocok dengan data/clean_summary.json")
+    return df, info
+
 
 if __name__ == "__main__":
-    df = load_clean_data()
-    print("DataFrame Info:")
-    print(df.info())
-    print("\nSample records:")
-    print(df.head(5))
+    df_clean, meta = load_clean_data()
+    print(df_clean.info())
+    print(df_clean.head(5))
