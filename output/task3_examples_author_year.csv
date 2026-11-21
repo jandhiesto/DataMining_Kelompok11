@@ -1,0 +1,11 @@
+no,author_id,year,n_items,venue_keys,venue_names
+1,Kannan Ramchandran,2020,11,"acssc, aistats, bigdataconf, blockchain2, europar, icdcs, isgteurope, isit, ita, nips, pkdd","ACSSC, AISTATS, IEEE BigData, Blockchain, Euro-Par, ICDCS [icdcs], ISGT Europe, ISIT, ITA, NeurIPS, ECML/PKDD"
+2,Tong Lu,2024,7,"aaai, cvpr, ecai, icmcs, istt, smc, wsse","AAAI, CVPR, ECAI [ecai], ICME, ISTT, SMC [smc], WSSE"
+3,Arnon Rungsawang,2015,3,"iccasa, iccsa, iscit","ICCASA/ICTCC, ICCSA, ISCIT"
+4,Jason Carpenter,2024,3,"infocom, sigcomm, wmcsa","INFOCOM, SIGCOMM, HotMobile"
+5,Eidah J. Alzahrani,2018,3,"acsw, nca, wise","ACSW [acsw], NCA, WISE"
+6,Allen Z. Ren,2025,2,"iclr, icra","ICLR, ICRA"
+7,Damalla Rambabu,2024,2,"avss, ijcnn","AVSS, IJCNN"
+8,Madhavan Mukund,2020,2,"acss, vmcai","ACSS, VMCAI"
+9,Helmut Schmid,2019,1,datech,DATeCH
+10,Ramón Toala,2019,1,dcai,DCAI

@@ -1,0 +1,5 @@
+min_support_pct,min_support,min_count,active_authors,itemsets_apriori,itemsets_fpgrowth,itemsets_identical,max_support_diff,n_1_itemsets,n_2_itemsets,n_3_itemsets,n_4plus_itemsets,rules_apriori_conf50,rules_fpgrowth_conf50,runtime_apriori_s,runtime_fpgrowth_s,speedup_ap_over_fp,peak_ram_apriori_mb,peak_ram_fpgrowth_mb
+0.1%,0.001,1739,1305817,1352,1352,True,0.0,583,375,270,124,865,865,14.967,55.0144,0.27,62.13,313.86
+0.5%,0.005,8692,678348,81,81,True,0.0,67,14,0,0,3,3,0.3187,15.5552,0.02,11.69,55.53
+1.0%,0.01,17384,465704,28,28,True,0.0,28,0,0,0,0,0,0.0669,9.4527,0.01,6.43,14.42
+2.0%,0.02,34767,229968,7,7,True,0.0,7,0,0,0,0,0,0.0094,4.321,0.0,2.66,0.07

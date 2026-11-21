@@ -660,8 +660,12 @@ def plot_task4_sensitivity(benchmark_df: pd.DataFrame, out_path: Path):
     ax.set_title("Pengaruh Minimum Support terhadap Jumlah Frequent Itemsets (DBLP 2015-2025)", fontsize=11, fontweight="bold")
     ax.set_xlabel("Minimum Support Threshold")
     ax.set_ylabel("Jumlah Frequent Itemsets")
-    if benchmark_df["itemsets_fpgrowth"].max() > 20 * max(1, benchmark_df["itemsets_fpgrowth"].min()):
+    max_val = float(benchmark_df["itemsets_fpgrowth"].max())
+    if max_val > 20 * max(1, float(benchmark_df["itemsets_fpgrowth"].min())):
         ax.set_yscale("symlog", linthresh=10)
+        ax.set_ylim(-1.5, max_val * 2.5)
+    else:
+        ax.set_ylim(0, max_val * 1.2)
     ax.grid(True, linestyle="--", alpha=0.55)
     ax.legend()
     plt.tight_layout()
@@ -687,6 +691,7 @@ def plot_task6_comparison(benchmark_df: pd.DataFrame, out_path: Path):
     axes[0].set_xticklabels(x_labels)
     axes[0].legend()
     axes[0].grid(axis="y", linestyle="--", alpha=0.55)
+    axes[0].set_ylim(0, float(max(benchmark_df["runtime_apriori_s"].max(), benchmark_df["runtime_fpgrowth_s"].max())) * 1.15)
     for bar in list(b1) + list(b2):
         h = bar.get_height()
         axes[0].text(bar.get_x() + bar.get_width() / 2, h, f"{h:.2f}s", ha="center", va="bottom", fontsize=7.5)
@@ -701,6 +706,7 @@ def plot_task6_comparison(benchmark_df: pd.DataFrame, out_path: Path):
     axes[1].set_xticklabels(x_labels)
     axes[1].legend()
     axes[1].grid(axis="y", linestyle="--", alpha=0.55)
+    axes[1].set_ylim(0, float(max(benchmark_df["peak_ram_apriori_mb"].max(), benchmark_df["peak_ram_fpgrowth_mb"].max())) * 1.15)
     for bar in list(m1) + list(m2):
         h = bar.get_height()
         axes[1].text(bar.get_x() + bar.get_width() / 2, h, f"{h:.1f}", ha="center", va="bottom", fontsize=7.5)
@@ -796,7 +802,7 @@ def analyze_association_rules(
 def plot_task5_rules(rules: pd.DataFrame, top10_lift: pd.DataFrame, output_dir: Path):
     """Plot Top 10 Rules by Lift dan Scatter Plot Support vs Lift."""
     # 1. Top 10 Lift Bar Chart
-    fig, ax = plt.subplots(figsize=(11, 5.8))
+    fig, ax = plt.subplots(figsize=(12.5, 6.0))
     y = np.arange(len(top10_lift))
     bars = ax.barh(y, top10_lift["lift"], color="#276749", edgecolor="black", alpha=0.88)
     ax.set_yticks(y)
@@ -807,7 +813,7 @@ def plot_task5_rules(rules: pd.DataFrame, top10_lift: pd.DataFrame, output_dir: 
     ax.grid(axis="x", linestyle="--", alpha=0.55)
 
     max_lift = float(top10_lift["lift"].max())
-    ax.set_xlim(0, max_lift * 1.25)
+    ax.set_xlim(0, max_lift * 1.52)
     for bar, (_, row) in zip(bars, top10_lift.iterrows()):
         w = bar.get_width()
         ax.text(

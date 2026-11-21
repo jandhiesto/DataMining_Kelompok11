@@ -1,0 +1,11 @@
+no,author_id,n_items,venue_keys,venue_names
+1,Tobias Fiebig,16,"anrw, ccs, eurosp, imc, msr, ndss, nspw, pam, raid, safeconfig, sosr, sp, spw, tma, usenix, uss","ANRW, CCS, EuroS&P, Internet Measurement Conference, MSR, NDSS, NSPW, PAM, RAID, SafeConfig@CCS, SOSR, SP, Security Protocols Workshop, TMA, USENIX ATC, USENIX Security Symposium"
+2,Igor Griva,6,"data, ic3k, icores, ieeecai, sdm, vtc","DATA [data], KDIR, ICORES, CAI [ieeecai], SDM, VTC Fall"
+3,Wilfrid Marquis-Favre,5,"cdc, ecms, eucc, icit2, summersim","CDC, ECMS, ECC [eucc], ICIT [icit2], SummerSim [summersim]"
+4,Liheng Ma,5,"aaai, aistats, icml, kdd, pakdd","AAAI, AISTATS, ICML, KDD, PAKDD"
+5,Jingyong Cai,3,"gcce, iait, soict","GCCE, IAIT, SoICT"
+6,Frank Medel-González,2,"enviroinfo, gi","EnviroInfo, GI-Jahrestagung"
+7,Rhowel M. Dellosa,2,"ccwc, uemcom","CCWC, UEMCON"
+8,Ana Ghiulai,2,"csndsp, iccomm","CSNDSP, COMM"
+9,Hugo Veríssimo,1,ijcnn,IJCNN
+10,Sefer Usta,1,siu,SIU

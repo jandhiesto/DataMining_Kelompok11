@@ -1,0 +1,17 @@
+Metrik,Author-Based,Author-Year-Based
+Jumlah Transaksi,"1,738,301","3,895,225"
+Jumlah Item Unik (venue_key),"4,232","4,232"
+Total Pasangan Transaksi-Item (NNZ),"4,597,655","6,139,541"
+Kepadatan Matriks (%),0.0625%,0.0372%
+Item per Transaksi — Min,1,1
+Item per Transaksi — Kuartil 1 (P25),1.0,1.0
+Item per Transaksi — Median (P50),1.0,1.0
+Item per Transaksi — Rata-rata (Mean),2.645,1.576
+Item per Transaksi — Kuartil 3 (P75),3.0,2.0
+Item per Transaksi — Persentil 95 (P95),9.0,4.0
+Item per Transaksi — Persentil 99 (P99),20.0,7.0
+Item per Transaksi — Maksimum,341,92
+Item per Transaksi — Standar Deviasi,4.452,1.390
+Transaksi 1 Item (len = 1),"1,020,107 (58.68%)","2,784,636 (71.49%)"
+Transaksi Multi-Item (len >= 2),"718,194 (41.32%)","1,110,589 (28.51%)"
+Transaksi >= 3 Item (len >= 3),"439,973 (25.31%)","485,151 (12.46%)"
