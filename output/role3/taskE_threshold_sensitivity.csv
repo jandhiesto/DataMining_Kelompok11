@@ -1,0 +1,5 @@
+min_support_pct,min_confidence_pct,rules_P1,rules_P2,rules_P3,rules_P4,stable_4_of_4,stable_ge_3_of_4
+0.05,25,14,28,82,281,3,15
+0.05,30,7,21,62,216,1,12
+0.05,40,5,9,34,136,0,6
+0.05,50,2,4,25,81,0,2

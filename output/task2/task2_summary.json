@@ -1,0 +1,20 @@
+{
+  "n_venues_all": 4232,
+  "spearman_all": 0.9867,
+  "spearman_all_p": 0.0,
+  "kendall_all": 0.903,
+  "kendall_all_p": 0.0,
+  "spearman_top50": 0.8311,
+  "spearman_top50_p": 7.975148839580121e-14,
+  "kendall_top50": 0.6566,
+  "kendall_top50_p": 1.748932306055466e-11,
+  "top10_overlap_count": 8,
+  "only_in_top10_papers": [
+    "ACL",
+    "ICC [icc]"
+  ],
+  "only_in_top10_authors": [
+    "ICLR",
+    "IJCNN"
+  ]
+}

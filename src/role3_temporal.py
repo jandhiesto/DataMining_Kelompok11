@@ -40,8 +40,9 @@ PERIODS = [
 PERIOD_IDS = [p["id"] for p in PERIODS]
 PERIOD_LABELS = {p["id"]: p["label"] for p in PERIODS}
 
-MIN_CONFIDENCE = 0.50
-MIN_SUPPORT_TEMPORAL = 0.0008  # 0.08% dari JUMLAH SELURUH transaksi (author-year) per periode
+MIN_CONFIDENCE = 0.25          # 25% untuk Author-Year (71.5% transaksi 1-item; 50% menghapus P2 menjadi 0 rules)
+MIN_SUPPORT_TEMPORAL = 0.0005  # 0.05% dari JUMLAH SELURUH transaksi (author-year) per periode
+CONF_SENSITIVITY_GRID = [0.25, 0.30, 0.40, 0.50]
 MIN_ABS_FLOOR = 5              # batas bawah count absolut
 DENSE_BYTES_LIMIT = 1_200_000_000
 
@@ -236,10 +237,10 @@ def construct_author_year_transactions(
 def _empty_rules() -> pd.DataFrame:
     return pd.DataFrame(columns=RULE_COLS_EMPTY)
 
-def _make_rules(fi: pd.DataFrame) -> pd.DataFrame:
+def _make_rules(fi: pd.DataFrame, min_conf: float = MIN_CONFIDENCE) -> pd.DataFrame:
     if fi.empty or not (fi["length"] >= 2).any():
         return _empty_rules()
-    return association_rules(fi[["support", "itemsets"]], metric="confidence", min_threshold=MIN_CONFIDENCE)
+    return association_rules(fi[["support", "itemsets"]], metric="confidence", min_threshold=min_conf)
 
 def _mine_period(df: pd.DataFrame, period: dict, venue_display_map: Dict[str, str], output_dir: Path) -> dict:
     p_id, p_label = period["id"], period["label"]
@@ -282,7 +283,7 @@ def _mine_period(df: pd.DataFrame, period: dict, venue_display_map: Dict[str, st
     v_multi = venue_codes[in_multi]
     row_multi = (np.cumsum(multi_tx) - 1)[tx_of_triple[in_multi]]
 
-    min_abs_count = max(math.ceil(MIN_SUPPORT_TEMPORAL * n_tx), MIN_ABS_FLOOR)
+    min_abs_count = max(math.ceil(MIN_SUPPORT_TEMPORAL * n_tx - 1e-12), MIN_ABS_FLOOR)
     v_arr, v_cnt = np.unique(v_multi, return_counts=True)
     freq_codes = v_arr[v_cnt >= min_abs_count]
     if len(freq_codes) < 2:
@@ -339,7 +340,8 @@ def _mine_period(df: pd.DataFrame, period: dict, venue_display_map: Dict[str, st
     fi_export.to_csv(output_dir / f"taskE_itemsets_{p_id.lower()}_{y0}_{y1}.csv", index=False)
 
     # --- Association rules
-    rules = _make_rules(fi)
+    rules = _make_rules(fi, min_conf=MIN_CONFIDENCE)
+    csv_name = f"taskE_rules_{p_id.lower()}_{y0}_{y1}.csv"
     if not rules.empty:
         rules["rule_count"] = np.rint(rules["support"] * n_tx).astype(int)
         rules["period"] = p_id
@@ -351,11 +353,14 @@ def _mine_period(df: pd.DataFrame, period: dict, venue_display_map: Dict[str, st
         rules["rule_keys"] = rules["antecedents_keys"] + " -> " + rules["consequents_keys"]
         rules["rule_names"] = rules["antecedents_names"] + " -> " + rules["consequents_names"]
         rules = rules.sort_values(by=["lift", "confidence", "support"], ascending=[False, False, False]).reset_index(drop=True)
-        csv_name = f"taskE_rules_{p_id.lower()}_{y0}_{y1}.csv"
         rules.drop(columns=["antecedents", "consequents"]).to_csv(output_dir / csv_name, index=False)
-        log(f"  [{p_id}] {len(fi):,} frequent itemsets | {len(rules):,} rules -> {csv_name}")
+        log(f"  [{p_id}] {len(fi):,} frequent itemsets | {len(rules):,} rules (conf>={MIN_CONFIDENCE*100:.0f}%) -> {csv_name}")
     else:
-        log(f"  [{p_id}] {len(fi):,} frequent itemsets | 0 rules (confidence >= 50%).")
+        pd.DataFrame(columns=[
+            "antecedent support", "consequent support", "support", "confidence", "lift",
+            "rule_count", "period", "period_label", "rule_keys", "rule_names",
+        ]).to_csv(output_dir / csv_name, index=False)
+        log(f"  [{p_id}] {len(fi):,} frequent itemsets | 0 rules (confidence >= {MIN_CONFIDENCE*100:.0f}%).")
 
     result.update(
         n_itemsets=len(fi), n_rules=len(rules), itemsets=fi, rules=rules,
@@ -517,8 +522,33 @@ def _cross_period_analysis(period_results: dict, venue_display_map: Dict[str, st
     inv_df.to_csv(output_dir / "taskE_venue_emergence.csv")
     out["venue_emergence"] = inv_df
 
-    # Visualisasi 
-    plot_temporal_comparison(stable_out.head(8)[[PERIOD_LABELS[p] for p in PERIOD_IDS]], output_dir / "taskE_temporal_comparison.png")
+    # 5. Uji sensitivitas confidence (menjelaskan mengapa min_conf=25% dipilih pada Author-Year vs 50%)
+    sens_rows = []
+    for mc in CONF_SENSITIVITY_GRID:
+        rsets = {}
+        row_s = {"min_support_pct": round(MIN_SUPPORT_TEMPORAL * 100, 3), "min_confidence_pct": int(round(mc * 100))}
+        for pid in PERIOD_IDS:
+            fi_p = period_results[pid]["itemsets"]
+            rp = _make_rules(fi_p, min_conf=mc)
+            s_keys = set(zip(rp["antecedents"], rp["consequents"])) if not rp.empty else set()
+            rsets[pid] = s_keys
+            row_s[f"rules_{pid}"] = len(s_keys)
+        all_u = set().union(*rsets.values())
+        row_s["stable_4_of_4"] = len(set.intersection(*rsets.values())) if all_u else 0
+        row_s["stable_ge_3_of_4"] = sum(1 for k in all_u if sum(k in rsets[p] for p in PERIOD_IDS) >= 3)
+        sens_rows.append(row_s)
+    sens_df = pd.DataFrame(sens_rows)
+    sens_df.to_csv(output_dir / "taskE_threshold_sensitivity.csv", index=False)
+    out["threshold_sensitivity"] = sens_df
+    log("\nUji sensitivitas confidence (min_support=0.05%):\n" + sens_df.to_string(index=False))
+
+    # Visualisasi (dengan fallback aman jika stable_out kosong agar grafik selalu terbentuk)
+    plot_source = stable_out.head(10)[[PERIOD_LABELS[p] for p in PERIOD_IDS]]
+    if plot_source.empty:
+        fallback_tbl = table.head(10)[["rule_names"] + [f"lift_{p}" for p in PERIOD_IDS]].copy()
+        fallback_tbl = fallback_tbl.rename(columns={f"lift_{p}": PERIOD_LABELS[p] for p in PERIOD_IDS}).set_index("rule_names")
+        plot_source = fallback_tbl
+    plot_temporal_comparison(plot_source, output_dir / "taskE_temporal_comparison.png")
     plot_venue_support_trend(venue_sup, first_p, last_p, output_dir / "taskE_venue_support_trend.png")
     return out
 
@@ -527,18 +557,22 @@ def plot_temporal_comparison(pivot_df: pd.DataFrame, out_path: Path):
     """Garis lift antarperiode. NaN = rule tidak muncul pada periode itu (garis terputus)."""
     if pivot_df.empty:
         return
-    plt.figure(figsize=(12, 6))
+    plt.figure(figsize=(12.5, 6.2))
     periods = list(pivot_df.columns)
     xs = np.arange(len(periods))  # posisi numerik agar periode tanpa data tetap tampil di sumbu-x
     for rule_name in pivot_df.index:
         short = rule_name if len(rule_name) <= 45 else rule_name[:42] + "..."
-        plt.plot(xs, pivot_df.loc[rule_name].to_numpy(dtype=float), marker="o", linewidth=2.2, label=short)
-    plt.xticks(xs, periods)
-    plt.title("Evolusi Nilai Lift Rule yang Bertahan pada 4 Periode (2015–2025)", fontsize=13, fontweight="bold")
-    plt.xlabel("Rentang Periode Waktu", fontsize=11, fontweight="bold")
-    plt.ylabel("Lift (titik hilang = rule tidak muncul)", fontsize=11, fontweight="bold")
+        plt.plot(xs, pivot_df.loc[rule_name].to_numpy(dtype=float), marker="o", linewidth=2.2, markersize=6, label=short)
+    plt.xticks(xs, periods, fontsize=10)
+    plt.title(
+        f"Evolusi Nilai Lift Pola Asosiasi Bertahan pada 4 Periode (2015–2025)\n"
+        f"(Author-Year DB | Min Support={MIN_SUPPORT_TEMPORAL*100:.2f}%, Min Confidence={MIN_CONFIDENCE*100:.0f}%)",
+        fontsize=11.5, fontweight="bold",
+    )
+    plt.xlabel("Rentang Periode Waktu", fontsize=10.5, fontweight="bold")
+    plt.ylabel("Lift (titik hilang = rule di bawah threshold)", fontsize=10.5, fontweight="bold")
     plt.grid(True, linestyle="--", alpha=0.5)
-    plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=9)
+    plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8.5)
     plt.tight_layout()
     plt.savefig(out_path, dpi=200)
     plt.close()
@@ -613,6 +647,18 @@ def main():
         log(f"[MODE SAMPLE] {len(df):,} publikasi dipakai. Output ke {out_dir}")
 
     _, venue_display_map = build_venue_label_map(df)
+
+    if args.verify:
+        log("\n[Verify] Cek silang bit-packing vs pandas groupby pada 20.000 baris sampel...")
+        df_v = df.head(20_000)
+        packed_v, _, _, _ = _pack_author_year_venue(df_v, int(df_v["year"].min()))
+        u_ay_v, _, _ = _group_transactions(packed_v)
+        exp_v = df_v[["author_id", "year", "venue_key"]].explode("author_id").drop_duplicates()
+        n_tx_pd = exp_v.groupby(["author_id", "year"]).ngroups
+        assert len(packed_v) == len(exp_v), f"NNZ beda: {len(packed_v)} vs {len(exp_v)}"
+        assert len(u_ay_v) == n_tx_pd, f"n_tx beda: {len(u_ay_v)} vs {n_tx_pd}"
+        log(f"[Verify] PASS - Bit-packing 100% cocok dengan pandas murni ({n_tx_pd:,} tx, {len(exp_v):,} pasangan unik).")
+
     t3b = construct_author_year_transactions(df, venue_display_map, out_dir)
     res = run_temporal_mining(df, venue_display_map, out_dir)
 

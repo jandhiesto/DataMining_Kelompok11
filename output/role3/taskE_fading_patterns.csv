@@ -1,2 +1,11 @@
 rule_keys,rule_names,lift_P1,support_P1,n_periods,last_period
-{ecoc} -> {ofc},{ECOC} -> {OFC},59.603561374610045,0.0018644871629299145,1,P1
+{ecoc} -> {ofc},{ECOC} -> {OFC},59.603561374610045,0.0018644871629299145,3,P3
+"{icc, wcnc} -> {globecom}","{ICC [icc], WCNC [wcnc]} -> {GLOBECOM}",43.499851247384214,0.0005176719305690159,1,P1
+"{icc, vtc} -> {globecom}","{ICC [icc], VTC Fall} -> {GLOBECOM}",41.91528502327082,0.0008030969153481588,3,P3
+{iccv} -> {cvpr},{ICCV} -> {CVPR},41.197218632652365,0.0013294509747317493,3,P3
+"{globecom, wcnc} -> {icc}","{GLOBECOM, WCNC [wcnc]} -> {ICC [icc]}",39.55395437365011,0.0005176719305690159,1,P1
+"{globecom, vtc} -> {icc}","{GLOBECOM, VTC Fall} -> {ICC [icc]}",36.82547094404839,0.0008030969153481588,3,P3
+{eucc} -> {cdc},{ECC [eucc]} -> {CDC},33.20009444855737,0.0007737947305989692,1,P1
+{amcc} -> {cdc},{ACC} -> {CDC},31.56023647940826,0.0020403002714250522,1,P1
+{cscw} -> {chi},{CSCW Companion} -> {CHI},26.88868823048469,0.0007249577560169866,1,P1
+{globecom} -> {icc},{GLOBECOM} -> {ICC [icc]},21.579687998291572,0.003213472927494457,1,P1
