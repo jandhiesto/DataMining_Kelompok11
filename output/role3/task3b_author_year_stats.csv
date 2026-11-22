@@ -1,0 +1,12 @@
+Metrik,Nilai
+Total Transaksi (Author-Year),"3,895,225"
+Total Item Unik (Venues),"4,232"
+"Total Pasangan (Author-Year, Venue)","6,139,541"
+Rata-rata Venue per Transaksi,1.576
+Median Venue per Transaksi,1.0
+Persentil 95 Venue per Transaksi,4.0
+Persentil 99 Venue per Transaksi,7.0
+Maksimum Venue per Transaksi,92
+Transaksi 1 Venue (len = 1),"2,784,636 (71.49%)"
+Transaksi Multi-Venue (len >= 2),"1,110,589 (28.51%)"
+Transaksi >= 3 Venue (len >= 3),"485,151 (12.46%)"

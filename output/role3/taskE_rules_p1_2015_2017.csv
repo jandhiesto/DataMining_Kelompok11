@@ -1,0 +1,2 @@
+antecedent support,consequent support,support,confidence,lift,representativity,leverage,conviction,zhangs_metric,jaccard,certainty,kulczynski,rule_count,period,period_label,antecedents_keys,consequents_keys,antecedents_names,consequents_names,rule_keys,rule_names
+0.0036215329817794674,0.008637632904399995,0.0018644871629299145,0.5148336829487563,59.603561374610045,1.0,0.0018332056904821264,2.043345410128485,0.9867961940071389,0.17936938818124867,0.5106064813892036,0.36534497314921166,1718,P1,2015-2017,{ecoc},{ofc},{ECOC},{OFC},{ecoc} -> {ofc},{ECOC} -> {OFC}

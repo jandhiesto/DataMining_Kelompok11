@@ -1,0 +1,17 @@
+venue_key,n_rules_P1,n_rules_P2,n_rules_P3,n_rules_P4,venue_name,first_period_in_rules
+nips,0,0,7,13,NeurIPS,P3
+cvpr,0,0,4,11,CVPR,P3
+eccv,0,0,0,10,ECCV,P4
+aaai,0,0,5,9,AAAI,P3
+iclr,0,0,3,9,ICLR,P3
+acl,0,0,3,7,ACL,P3
+icml,0,0,3,6,ICML,P3
+emnlp,0,0,3,4,EMNLP,P3
+naacl,0,0,0,4,NAACL-HLT,P4
+ijcai,0,0,0,4,IJCAI,P4
+coling,0,0,0,3,COLING,P4
+mm,0,0,0,3,ACM Multimedia,P4
+icassp,0,0,0,1,ICASSP,P4
+ecoc,1,0,0,0,ECOC,P1
+iccv,0,0,2,0,ICCV,P3
+ofc,1,0,0,0,OFC,P1

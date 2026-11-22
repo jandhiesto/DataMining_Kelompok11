@@ -1,0 +1,2 @@
+rule_keys,rule_names,lift_P1,support_P1,n_periods,last_period
+{ecoc} -> {ofc},{ECOC} -> {OFC},59.603561374610045,0.0018644871629299145,1,P1
