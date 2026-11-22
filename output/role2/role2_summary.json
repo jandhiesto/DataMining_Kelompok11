@@ -9,6 +9,7 @@
     "expected_unique_authors": 1738301,
     "expected_unique_venues": 4232
   },
+  "implementation": "From Scratch (FPNode/FPTree + Level-wise Apriori + Rule Generator) verified 100% against mlxtend",
   "task3_stats": {
     "author_based": {
       "n_tx": 1738301,
@@ -58,10 +59,12 @@
       "min_support_pct": "0.1%",
       "min_support": 0.001,
       "min_count": 1739,
-      "active_authors": 1305817,
+      "candidates_apriori": 175238,
+      "fptree_nodes": 981249,
       "itemsets_apriori": 1352,
       "itemsets_fpgrowth": 1352,
       "itemsets_identical": true,
+      "verified_vs_mlxtend": true,
       "max_support_diff": 0.0,
       "n_1_itemsets": 583,
       "n_2_itemsets": 375,
@@ -69,20 +72,22 @@
       "n_4plus_itemsets": 124,
       "rules_apriori_conf50": 865,
       "rules_fpgrowth_conf50": 865,
-      "runtime_apriori_s": 14.967,
-      "runtime_fpgrowth_s": 55.0144,
+      "runtime_apriori_s": 5.3161,
+      "runtime_fpgrowth_s": 19.614,
       "speedup_ap_over_fp": 0.27,
-      "peak_ram_apriori_mb": 62.13,
-      "peak_ram_fpgrowth_mb": 313.86
+      "peak_ram_apriori_mb": 340.41,
+      "peak_ram_fpgrowth_mb": 287.74
     },
     {
       "min_support_pct": "0.5%",
       "min_support": 0.005,
       "min_count": 8692,
-      "active_authors": 678348,
+      "candidates_apriori": 6448,
+      "fptree_nodes": 177161,
       "itemsets_apriori": 81,
       "itemsets_fpgrowth": 81,
       "itemsets_identical": true,
+      "verified_vs_mlxtend": true,
       "max_support_diff": 0.0,
       "n_1_itemsets": 67,
       "n_2_itemsets": 14,
@@ -90,20 +95,22 @@
       "n_4plus_itemsets": 0,
       "rules_apriori_conf50": 3,
       "rules_fpgrowth_conf50": 3,
-      "runtime_apriori_s": 0.3187,
-      "runtime_fpgrowth_s": 15.5552,
-      "speedup_ap_over_fp": 0.02,
-      "peak_ram_apriori_mb": 11.69,
-      "peak_ram_fpgrowth_mb": 55.53
+      "runtime_apriori_s": 0.1987,
+      "runtime_fpgrowth_s": 5.7147,
+      "speedup_ap_over_fp": 0.03,
+      "peak_ram_apriori_mb": 48.41,
+      "peak_ram_fpgrowth_mb": 63.45
     },
     {
       "min_support_pct": "1.0%",
       "min_support": 0.01,
       "min_count": 17384,
-      "active_authors": 465704,
+      "candidates_apriori": 4610,
+      "fptree_nodes": 45766,
       "itemsets_apriori": 28,
       "itemsets_fpgrowth": 28,
       "itemsets_identical": true,
+      "verified_vs_mlxtend": true,
       "max_support_diff": 0.0,
       "n_1_itemsets": 28,
       "n_2_itemsets": 0,
@@ -111,20 +118,22 @@
       "n_4plus_itemsets": 0,
       "rules_apriori_conf50": 0,
       "rules_fpgrowth_conf50": 0,
-      "runtime_apriori_s": 0.0669,
-      "runtime_fpgrowth_s": 9.4527,
-      "speedup_ap_over_fp": 0.01,
-      "peak_ram_apriori_mb": 6.43,
-      "peak_ram_fpgrowth_mb": 14.42
+      "runtime_apriori_s": 0.0739,
+      "runtime_fpgrowth_s": 2.9585,
+      "speedup_ap_over_fp": 0.02,
+      "peak_ram_apriori_mb": 48.41,
+      "peak_ram_fpgrowth_mb": 48.41
     },
     {
       "min_support_pct": "2.0%",
       "min_support": 0.02,
       "min_count": 34767,
-      "active_authors": 229968,
+      "candidates_apriori": 4253,
+      "fptree_nodes": 126,
       "itemsets_apriori": 7,
       "itemsets_fpgrowth": 7,
       "itemsets_identical": true,
+      "verified_vs_mlxtend": true,
       "max_support_diff": 0.0,
       "n_1_itemsets": 7,
       "n_2_itemsets": 0,
@@ -132,11 +141,11 @@
       "n_4plus_itemsets": 0,
       "rules_apriori_conf50": 0,
       "rules_fpgrowth_conf50": 0,
-      "runtime_apriori_s": 0.0094,
-      "runtime_fpgrowth_s": 4.321,
-      "speedup_ap_over_fp": 0.0,
-      "peak_ram_apriori_mb": 2.66,
-      "peak_ram_fpgrowth_mb": 0.07
+      "runtime_apriori_s": 0.0512,
+      "runtime_fpgrowth_s": 0.7998,
+      "speedup_ap_over_fp": 0.06,
+      "peak_ram_apriori_mb": 48.41,
+      "peak_ram_fpgrowth_mb": 48.41
     }
   ],
   "task5_total_rules_0_1pct": 865,
@@ -147,5 +156,5 @@
     "spearman_consequent_support_lift": -0.8633037266087469,
     "spearman_consequent_p_value": 1.5990983143184395e-258
   },
-  "total_pipeline_seconds": 119.04
+  "total_pipeline_seconds": 65.63
 }

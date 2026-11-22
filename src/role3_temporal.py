@@ -24,8 +24,10 @@ from scipy.sparse import csr_matrix
 
 try:
     from src.data_loader import build_venue_label_map
+    from src.role2_mining import association_rules_from_scratch, fpgrowth_from_scratch
 except ImportError:
     from data_loader import build_venue_label_map
+    from role2_mining import association_rules_from_scratch, fpgrowth_from_scratch
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = ROOT / "output" / "role3"
@@ -240,7 +242,7 @@ def _empty_rules() -> pd.DataFrame:
 def _make_rules(fi: pd.DataFrame, min_conf: float = MIN_CONFIDENCE) -> pd.DataFrame:
     if fi.empty or not (fi["length"] >= 2).any():
         return _empty_rules()
-    return association_rules(fi[["support", "itemsets"]], metric="confidence", min_threshold=min_conf)
+    return association_rules_from_scratch(fi[["support", "itemsets"]], min_confidence=min_conf)
 
 def _mine_period(df: pd.DataFrame, period: dict, venue_display_map: Dict[str, str], output_dir: Path) -> dict:
     p_id, p_label = period["id"], period["label"]
@@ -312,16 +314,11 @@ def _mine_period(df: pd.DataFrame, period: dict, venue_display_map: Dict[str, st
             shape=(n_multi, len(freq_codes)), dtype=bool,
         )
         adj_min_support = (min_abs_count - 0.25) / float(n_multi)
-        if n_multi * len(freq_codes) <= DENSE_BYTES_LIMIT:
-            df_active = pd.DataFrame(X.toarray(), columns=col_names, dtype=bool)
-        else:
-            df_active = pd.DataFrame.sparse.from_spmatrix(X, columns=col_names)
-        fi_raw = fpgrowth(df_active, min_support=adj_min_support, use_colnames=True)
-        del df_active, X
+        fi_raw, _ = fpgrowth_from_scratch(X, np.asarray(col_names, dtype=object), adj_min_support)
+        del X
         if not fi_raw.empty:
             fi_raw["length"] = fi_raw["itemsets"].apply(len)
             fi_raw = fi_raw[fi_raw["length"] >= 2].copy()
-            fi_raw["count"] = np.rint(fi_raw["support"] * n_multi).astype(int)
             fi_raw = fi_raw[fi_raw["count"] >= min_abs_count]
             fi_raw["support"] = fi_raw["count"] / float(n_tx)
             fi_multi = fi_raw[["support", "count", "itemsets"]]
