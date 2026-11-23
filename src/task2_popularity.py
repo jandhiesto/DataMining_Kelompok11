@@ -1,6 +1,6 @@
 """
 Module src/task2_popularity.py
-Implementasi Task 2 — Conference Popularity Analysis menggunakan dataset bersih
+Implementasi Task 2 Conference Popularity Analysis menggunakan dataset bersih
 DBLP 2015-2025 (`data/clean_inproceedings.parquet`).
 
 Cakupan sesuai spesifikasi proyek (Task 2):

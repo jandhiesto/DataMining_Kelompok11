@@ -453,7 +453,7 @@ def _cross_period_analysis(period_results: dict, venue_display_map: Dict[str, st
     table["category"] = table.apply(_classify, axis=1)
     table = table.sort_values(["n_periods", "mean_lift"], ascending=[False, False])
     table.index.name = "rule_keys"
-    pres = pres.loc[table.index]  # selaraskan urutan dengan table (sudah di-sort)
+    pres = pres.loc[table.index]
     table.to_csv(output_dir / "taskE_rule_presence.csv")
     out["rule_presence"] = table
     log("\nJumlah rule per kategori:\n" + table["category"].value_counts().to_string())
@@ -542,7 +542,7 @@ def _cross_period_analysis(period_results: dict, venue_display_map: Dict[str, st
     out["threshold_sensitivity"] = sens_df
     log("\nUji sensitivitas confidence (min_support=0.05%):\n" + sens_df.to_string(index=False))
 
-    # Visualisasi (dengan fallback aman jika stable_out kosong agar grafik selalu terbentuk)
+    # Visualisasi
     plot_source = stable_out.head(10)[[PERIOD_LABELS[p] for p in PERIOD_IDS]]
     if plot_source.empty:
         fallback_tbl = table.head(10)[["rule_names"] + [f"lift_{p}" for p in PERIOD_IDS]].copy()
