@@ -1,0 +1,48 @@
+venue_key,n_rules_P1,n_rules_P2,n_rules_P3,n_rules_P4,venue_name,first_period_in_rules
+cvpr,2,8,30,130,CVPR,P1
+aaai,0,5,21,123,AAAI,P2
+nips,1,8,39,120,NeurIPS,P1
+iclr,0,4,25,110,ICLR,P2
+icml,1,5,15,72,ICML,P1
+eccv,1,5,3,72,ECCV,P1
+acl,1,5,16,62,ACL,P1
+emnlp,1,5,16,41,EMNLP,P1
+mm,0,0,7,39,ACM Multimedia,P3
+icassp,0,0,1,32,ICASSP,P3
+naacl,0,2,4,22,NAACL-HLT,P2
+ijcai,0,0,2,19,IJCAI,P3
+icmcs,0,0,0,12,ICME,P4
+coling,0,0,0,11,COLING,P4
+www,0,0,0,11,WWW,P4
+ijcnn,0,0,0,10,IJCNN,P4
+icra,0,0,1,5,ICRA,P3
+wacv,0,1,1,3,WACV,P2
+kdd,0,0,0,3,KDD,P4
+icic,0,0,0,2,ICIC,P4
+miccai,0,1,0,2,MICCAI,P2
+chi,2,2,2,2,CHI,P1
+eacl,0,0,4,2,EACL,P3
+3dim,0,0,0,1,3DV,P4
+ACMdis,0,1,1,1,Conference on Designing Interactive Systems,P2
+uist,1,1,1,1,UIST,P1
+interspeech,0,0,2,1,INTERSPEECH,P3
+ecir,0,0,0,1,ECIR,P4
+corl,0,0,1,1,CoRL,P3
+clef,0,0,0,1,CLEF (Working Notes),P4
+aistats,0,2,4,0,AISTATS,P2
+cscw,1,0,0,0,CSCW Companion,P1
+bmvc,0,1,1,0,BMVC,P2
+cdc,2,0,0,0,CDC,P1
+asru,0,0,1,0,ASRU,P3
+amcc,1,0,0,0,ACC,P1
+ecoc,1,1,1,0,ECOC,P1
+eucc,1,0,0,0,ECC [eucc],P1
+globecom,5,2,3,0,GLOBECOM,P1
+iccv,1,1,15,0,ICCV,P1
+icc,5,2,3,0,ICC [icc],P1
+isbi,0,1,0,0,ISBI,P2
+ofc,1,2,1,0,OFC,P1
+uai,0,0,1,0,UAI,P3
+ps,0,1,0,0,OECC/PSC,P2
+vtc,2,2,2,0,VTC Fall,P1
+wcnc,2,0,0,0,WCNC [wcnc],P1
