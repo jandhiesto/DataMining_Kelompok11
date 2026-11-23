@@ -58,7 +58,7 @@ def analyze_conference_popularity(
         )
     )
 
-    # 2. Jumlah author unik per venue (vectorized int64 bit-packing -> cepat & hemat RAM)
+    # 2. Jumlah author unik per venue
     venue_codes_paper, unique_venues = pd.factorize(df["venue_key"], sort=True)
     authors_col = df["author_id"].tolist()
     n_auth_per_paper = np.fromiter((len(lst) for lst in authors_col), dtype=np.int32, count=len(authors_col))
@@ -109,7 +109,7 @@ def analyze_conference_popularity(
     top10_papers = venue_stats.sort_values("rank_papers").head(10)[cols_view].reset_index(drop=True)
     top10_authors = venue_stats.sort_values("rank_authors").head(10)[cols_view].reset_index(drop=True)
 
-    # Gabungan Top 10 Publikasi U Top 10 Author Unik untuk tabel perbandingan langsung
+    # Gabungan Top 10 Publikasi dan Top 10 Author Unik untuk tabel perbandingan
     top_union_keys = list(dict.fromkeys(top10_papers["venue_key"].tolist() + top10_authors["venue_key"].tolist()))
     rank_comparison = venue_stats[venue_stats["venue_key"].isin(top_union_keys)][cols_view].sort_values("rank_papers").reset_index(drop=True)
 
